@@ -1,0 +1,36 @@
+Management Division Count: 19
+Rest of Company Count: 81
+
+--- Numerical Feature Comparison (Mean) ---
+Feature              | Mgmt Div   | Rest       | Diff      
+------------------------------------------------------------
+나이                   | 38.26      | 41.72      | -3.45     
+승진후경과연수              | 3.39       | 3.32       | 0.08      
+근무연수                 | 7.58       | 5.99       | 1.59      
+보유역량                 | 3.11       | 3.20       | -0.09     
+기본급                  | 5376.53    | 5232.98    | 143.55    
+경력이직횟수               | 0.63       | 0.67       | -0.04     
+
+--- Categorical Feature Comparison (Top Value) ---
+재직                   | Mgmt: 재직 | Rest: 재직
+성별                   | Mgmt: M | Rest: M
+직위                   | Mgmt: 과장 | Rest: 과장
+직책                   | Mgmt: 팀원 | Rest: 팀원
+직무                   | Mgmt: 개발 | Rest: 생산
+팀                    | Mgmt: B팀 | Rest: C팀
+채용유형                 | Mgmt: 정규직 | Rest: 정규직
+근무지역                 | Mgmt: 서울 | Rest: 서울
+국가핵심기술관리             | Mgmt: N | Rest: N
+최종교육수준               | Mgmt: 학사 | Rest: 학사
+전공                   | Mgmt: 경영 | Rest: 디자인
+직무역할                 | Mgmt: 운영 | Rest: 분석
+결혼                   | Mgmt: 미혼 | Rest: 기혼
+경력입사여부               | Mgmt: N | Rest: Y
+연장근무                 | Mgmt: N | Rest: N
+재택근무                 | Mgmt: Y | Rest: N
+평가등급                 | Mgmt: BB | Rest: BB
+핵심인재                 | Mgmt: N | Rest: N
+인센티브                 | Mgmt: Y | Rest: Y
+퇴직후이직처               | Mgmt: 네오텍 | Rest: 브라이트랩
+
+--- Potential Reasons for High Risk ---
