@@ -1,0 +1,32 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --name "HR_Insight_Dashboard" --onefile --add-data "pj7.py;." --collect-all streamlit --collect-all plotly --collect-data xgboost --collect-all sklearn --hidden-import="xgboost" --hidden-import="xgboost.core" --hidden-import="xgboost.sklearn" --hidden-import="sklearn.utils._typedefs" --hidden-import="sklearn.utils._heap" --hidden-import="sklearn.utils._sorting" --hidden-import="sklearn.utils._vector_sentinel" --hidden-import="scipy.special._cdflib" --noconfirm run.py
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: HR_Insight_Dashboard_Windows
+          path: dist/HR_Insight_Dashboard.exe
