@@ -23,6 +23,7 @@ def main():
     if getattr(sys, 'frozen', False):
         from streamlit.web import cli as stcli
         sys.argv = ['streamlit', 'run', app_path,
+                     '--global.developmentMode=false',
                      '--server.headless=true',
                      '--server.port=8501',
                      '--browser.gatherUsageStats=false']

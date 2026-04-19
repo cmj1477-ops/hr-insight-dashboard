@@ -1,6 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+
+# NumPy 2.0 compatibility shim
+if not hasattr(np, "unicode_"):
+    np.unicode_ = np.str_
+
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -12,6 +17,7 @@ from scipy.stats import chi2_contingency
 
 # ★ XGBoost
 import xgboost as xgb
+import shap
 
 # =========================
 # 페이지/스타일
@@ -220,6 +226,190 @@ st.markdown(f"""
     }}
     </style>
     """, unsafe_allow_html=True)
+
+def reason_to_tags(reason: str) -> list:
+    """예측사유 문자열을 태그 딕셔너리 리스트로 변환"""
+    tags = []
+    if "서울" in reason:
+        tags.append({"label": "서울근무", "color": "red"})
+    if "인센티브" in reason and "'Y'" in reason:
+        tags.append({"label": "인센티브Y", "color": "amber"})
+    if "파트장" in reason and "직책" in reason:
+        tags.append({"label": "파트장직책", "color": "blue"})
+    if "퇴직률" in reason:
+        import re
+        matches = re.findall(r"(\S+)\s+'[^']+'\s+퇴직률", reason)
+        for m in matches:
+            if m not in ['직책']:
+                tags.append({"label": m, "color": "blue"})
+    if "↓" in reason:
+        tags.append({"label": "평균이하", "color": "amber"})
+    if "↑" in reason:
+        tags.append({"label": "평균이상", "color": "red"})
+    if "복합" in reason:
+        tags.append({"label": "복합요인", "color": "gray"})
+    return tags if tags else [{"label": "기타", "color": "gray"}]
+
+
+def build_core_talent_html(df) -> str:
+    """핵심인재 전체 리스트를 접이식 HTML 테이블로 생성"""
+    import streamlit.components.v1 as components
+
+    tag_colors = {
+        "red":   ("rgba(162,28,28,.12)", "#991f1f"),
+        "amber": ("rgba(146,88,0,.12)",  "#7a4e00"),
+        "blue":  ("rgba(20,80,150,.12)", "#0d4a8a"),
+        "gray":  ("rgba(100,100,100,.1)","#555555"),
+    }
+
+    # 컬럼 구성 확인
+    has_incentive = '인센티브' in df.columns
+    has_grade = '평가등급' in df.columns
+    has_reason = '예측사유' in df.columns
+
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        risk_str = str(row.get("예측퇴직위험", "0%")).replace("%", "")
+        try:
+            risk = float(risk_str)
+        except Exception:
+            risk = 0.0
+
+        if risk >= 7:
+            risk_color = "#c0392b"
+        elif risk >= 4:
+            risk_color = "#b87a00"
+        else:
+            risk_color = "#1a7a3c"
+        risk_text = f"{risk}%"
+
+        grade = str(row.get("평가등급", ""))
+        if grade in ["EE", "AA", "SS"]:
+            grade_bg, grade_color = "rgba(20,130,60,.13)", "#0e6b30"
+        else:
+            grade_bg, grade_color = "rgba(180,120,0,.13)", "#7a5200"
+
+        tags_html = ""
+        reason_text = ""
+        if has_reason:
+            reason_text = str(row.get("예측사유", ""))
+            tags = reason_to_tags(reason_text)
+            for t in tags:
+                bg, fc = tag_colors.get(t["color"], tag_colors["gray"])
+                tags_html += (
+                    f'<span style="display:inline-flex;align-items:center;padding:2px 8px;'
+                    f'border-radius:20px;font-size:11px;font-weight:500;margin:1px 2px;'
+                    f'background:{bg};color:{fc}">{t["label"]}</span>'
+                )
+
+        incentive_td = f'<td style="padding:9px 10px;text-align:center">{row.get("인센티브","")}</td>' if has_incentive else ""
+        grade_td = f"""<td style="padding:9px 10px">
+            <span style="padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500;
+              background:{grade_bg};color:{grade_color}">{grade}</span>
+          </td>""" if has_grade else ""
+
+        rows_html += f"""
+        <tr class="main-row" onclick="toggle({i})" style="cursor:pointer">
+          <td>
+            <span id="chev-{i}" style="font-size:9px;color:#aaa;display:inline-block;transition:transform .2s">▶</span>
+          </td>
+          <td style="color:#888;white-space:nowrap">{row.get("사원번호","")}</td>
+          <td><strong style="color:#334155">{row.get("이름","")}</strong></td>
+          <td style="white-space:nowrap">{row.get("소속조직","")}</td>
+          <td style="white-space:nowrap">{row.get("직책","")}</td>
+          {grade_td}
+          {incentive_td}
+          <td style="font-weight:600;color:{risk_color};white-space:nowrap">{risk_text}</td>
+          <td style="text-align:left">{tags_html}</td>
+        </tr>
+        <tr id="detail-{i}" class="detail-row" style="display:none">
+          <td colspan="9" style="padding:0">
+            <div style="padding:10px 12px 10px 44px;font-size:0.85rem;color:#64748B;border-bottom:1px solid #E2E8F0;text-align:left">
+              <span style="font-size:0.75rem;font-weight:700;color:#94A3B8;letter-spacing:.04em;margin-right:6px">예측사유</span>{reason_text}
+            </div>
+          </td>
+        </tr>
+        """
+
+    incentive_th = '<th>인센티브</th>' if has_incentive else ""
+    grade_th = '<th>평가등급</th>' if has_grade else ""
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <style>
+      * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+      body {{ font-family: 'Pretendard', 'Noto Sans KR', sans-serif; font-size: 0.9rem; color: #475569; }}
+      .table-wrap {{
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid #E2E8F0;
+        background: #FFFFFF;
+      }}
+      table {{ width: 100%; border-collapse: collapse; }}
+      th {{
+        background-color: #F1F5F9;
+        color: #334155;
+        font-weight: 700;
+        text-align: center;
+        padding: 10px 12px;
+        border-bottom: 2px solid #CBD5E1;
+        font-size: 0.95rem;
+        white-space: nowrap;
+      }}
+      td {{
+        text-align: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid #E2E8F0;
+        color: #475569;
+        font-size: 0.9rem;
+        vertical-align: middle;
+      }}
+      /* Zebra Striping */
+      .main-row:nth-child(4n+1) td {{ background-color: #F8FAFC; }}
+      /* Hover Effect */
+      .main-row:hover td {{
+        background-color: #E0F2FE !important;
+        color: #0284C7;
+        transition: background-color 0.2s ease;
+      }}
+      /* Detail row */
+      .detail-row td {{ background-color: #F8FAFC; }}
+    </style>
+    </head>
+    <body>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:22px"></th>
+          <th>사원번호</th><th>이름</th><th>소속조직</th><th>직책</th>
+          {grade_th}
+          {incentive_th}
+          <th>예측퇴직위험</th><th>예측사유</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+    </div>
+    <script>
+      function toggle(idx) {{
+        var detail = document.getElementById('detail-' + idx);
+        var chev   = document.getElementById('chev-'   + idx);
+        var isOpen = detail.style.display !== 'none';
+        detail.style.display = isOpen ? 'none' : 'table-row';
+        chev.style.transform  = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+      }}
+    </script>
+    </body>
+    </html>
+    """
+    return html
+
 
 def show_table_centered(df):
     """
@@ -895,22 +1085,96 @@ if menu == "전체 현황":
         if feature_importance is not None and len(feature_importance) > 0:
             top_imp = feature_importance[feature_importance > 0].head(10)
             if len(top_imp) == 0:
-                st.info("중요도가 0으로 계산되었습니다. 데이터 규모/변동이 매우 작거나, 중요도 타입이 맞지 않았을 수 있어요.")
+                st.info("영향도가 0으로 계산되었습니다.")
             else:
-                # Bar Chart: Unified Blue Gradient
+                top_imp_pct = (top_imp / feature_importance.sum() * 100)
                 fig_imp = px.bar(
-                    top_imp,
+                    top_imp_pct,
                     orientation="h",
-                    color=top_imp.values,
+                    color=top_imp_pct.values,
                     color_continuous_scale=[(0, '#A5E6F3'), (1, COLORS['primary'])],
-                    labels={"value": "중요도", "index": "변수"}
+                    labels={"value": "영향도(%)", "index": "변수"}
                 )
                 fig_imp.update_layout(height=350, showlegend=False)
                 st.plotly_chart(set_font(fig_imp), use_container_width=True)
-                st.caption("위 변수들은 모델이 퇴직을 예측할 때 가장 크게 반응한 핵심 요인으로,<br>중요도가 높을수록 해당 변수의 변화가 퇴직 확률에 더 큰 영향을 미친다는 것을 의미합니다.", unsafe_allow_html=True)
-
         else:
             st.info("피처 중요도를 계산할 수 없습니다. 데이터 규모를 확인하세요.")
+
+    # 변수별 퇴직 영향 해석 (XGBoost 영향도 + SHAP 방향)
+    if feature_importance is not None and len(feature_importance) > 0:
+        top_imp = feature_importance[feature_importance > 0].head(10)
+        if len(top_imp) > 0:
+            st.markdown("---")
+            st.subheader("변수별 퇴직 영향 해석")
+
+            # SHAP은 방향 판단용으로만 사용
+            _shap_direction = {}
+            try:
+                _shap_explainer = shap.TreeExplainer(model.named_steps['model'] if hasattr(model, 'named_steps') else model)
+                _shap_values = _shap_explainer.shap_values(df[X.columns])
+                if isinstance(_shap_values, list):
+                    _shap_values = _shap_values[1]
+                _shap_df = pd.DataFrame(_shap_values, columns=X.columns)
+                _shap_direction = _shap_df.mean().to_dict()
+            except Exception:
+                pass
+
+            _total_imp = feature_importance.sum()
+            interpretation_rows = []
+            for feat in top_imp.index:
+                importance_pct = (top_imp[feat] / _total_imp * 100) if _total_imp > 0 else 0
+                direction = _shap_direction.get(feat, 0)
+
+                left_group = df[df['상태'] == 1][feat].mean()
+                stay_group = df[df['상태'] == 0][feat].mean()
+
+                feat_display = feat
+                detail = ""
+                if feat in label_encoders:
+                    le = label_encoders[feat]
+                    classes = list(le.classes_)
+                    if left_group > stay_group:
+                        high_idx = min(int(round(left_group)), len(classes)-1)
+                        detail = f"'{classes[high_idx]}' 값일 때 퇴직 확률 상승"
+                    else:
+                        low_idx = min(int(round(stay_group)), len(classes)-1)
+                        detail = f"'{classes[low_idx]}' 값일 때 퇴직 확률 하락"
+                else:
+                    if left_group > stay_group:
+                        detail = f"값이 높을수록 퇴직 확률 상승 (퇴직자 평균: {left_group:.1f}, 재직자 평균: {stay_group:.1f})"
+                    else:
+                        detail = f"값이 낮을수록 퇴직 확률 상승 (퇴직자 평균: {left_group:.1f}, 재직자 평균: {stay_group:.1f})"
+
+                arrow = "↑ 퇴직 위험 증가" if direction > 0 else "↓ 퇴직 위험 감소"
+                interpretation_rows.append({
+                    "변수": feat_display,
+                    "영향도": f"{importance_pct:.1f}%",
+                    "방향": arrow,
+                    "해석": detail
+                })
+
+            # 기타 행 추가
+            top_sum = sum(top_imp[feat] for feat in top_imp.index)
+            etc_pct = ((_total_imp - top_sum) / _total_imp * 100) if _total_imp > 0 else 0
+            if etc_pct > 0:
+                interpretation_rows.append({
+                    "변수": "기타",
+                    "영향도": f"{etc_pct:.1f}%",
+                    "방향": "-",
+                    "해석": f"나머지 {len(feature_importance) - len(top_imp)}개 변수의 합산"
+                })
+
+            interp_df = pd.DataFrame(interpretation_rows)
+            st.markdown("""
+            <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 12px;">
+                <p style="margin: 0; font-size: 13px; color: #64748B; line-height: 1.7;">
+                <b>영향도</b>: 퇴직 예측에서 해당 변수가 차지하는 비중 (전체 합계 = 100%)<br>
+                <b>방향</b>: 해당 변수가 전반적으로 퇴직 확률을 높이는지(↑) 낮추는지(↓)<br>
+                <b>해석</b>: 퇴직자와 재직자 그룹 간 실제 평균 비교 기반 설명
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            st.dataframe(interp_df, use_container_width=True, hide_index=True)
 
     # 퇴직 추이 및 사유 현황
     st.markdown("---")
@@ -1158,6 +1422,64 @@ if menu == "전체 현황":
                 except Exception:
                     st.info(f"{var}: 버킷팅/집계가 어려워 해설을 생략합니다.")
 
+    # 상관분석
+    st.markdown("---")
+    st.subheader("숫자형 변수별 퇴직 영향")
+    num_cols = [c for c in X.columns if (c not in label_encoders) and pd.api.types.is_numeric_dtype(df[c])]
+   
+    if len(num_cols) > 0:
+        pearson = df[num_cols + ['상태']].corr(numeric_only=True)['상태'].drop('상태').sort_values(key=np.abs, ascending=False)
+        pearson_df = pearson.reset_index().rename(columns={'index': '변수', '상태': '상관계수'})
+        pearson_df['상관계수'] = pearson_df['상관계수'].round(2)
+
+
+        # 해석 컬럼 추가
+        def _num_interpret(row):
+            v = row['상관계수']
+            name = row['변수']
+            strength = "강한" if abs(v) >= 0.5 else ("보통" if abs(v) >= 0.3 else "약한")
+            if v > 0:
+                return f"{strength} 관련 | {name} 값이 높을수록 퇴직 가능성 증가"
+            elif v < 0:
+                return f"{strength} 관련 | {name} 값이 높을수록 퇴직 가능성 감소"
+            else:
+                return "관련 없음"
+
+        pearson_df['해석'] = pearson_df.apply(_num_interpret, axis=1)
+        fig_corr = px.bar(x=pearson_df['변수'], y=pearson_df['상관계수'],
+                          color=pearson_df['상관계수'], color_continuous_scale=[(0, '#A5E6F3'), (1, COLORS['primary'])])
+        fig_corr.update_layout(yaxis_title="상관계수", height=300)
+        st.plotly_chart(set_font(fig_corr), use_container_width=True)
+        show_table_centered(pearson_df)
+
+    st.subheader("범주형 변수별 퇴직 영향")
+    cat_vs = []
+    for c in [col for col in CAT_COLS if col in df.columns]:
+        try:
+            cat_vs.append((c, cramers_v(df[c], df['상태'])))
+        except Exception:
+            pass
+    if len(cat_vs) > 0:
+        cv_df = pd.DataFrame(cat_vs, columns=['변수','관련도']).sort_values('관련도', ascending=False)
+        cv_df['관련도'] = cv_df['관련도'].round(2)
+
+        def _cat_interpret(row):
+            v = row['관련도']
+            strength = "강한" if v >= 0.5 else ("보통" if v >= 0.3 else "약한")
+            return f"{strength} 관련 | {row['변수']}에 따라 퇴직 비율 차이가 {'크게' if v >= 0.3 else '다소'} 존재"
+
+        cv_df['해석'] = cv_df.apply(_cat_interpret, axis=1)
+        show_table_centered(cv_df)
+
+        st.markdown("""
+        <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; margin-top: 12px;">
+            <p style="margin: 0; font-size: 13px; color: #64748B; line-height: 1.7;">
+            <b>상관계수</b> (숫자형): -1 ~ +1 범위. 양수면 값이 높을수록 퇴직 증가, 음수면 감소<br>
+            <b>관련도</b> (범주형): 0 ~ 1 범위. 1에 가까울수록 해당 범주에 따라 퇴직 비율 차이가 큼
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.divider()
     st.subheader("조직별 예측 퇴직 위험 순위")
     dept_col = None
@@ -1173,14 +1495,9 @@ if menu == "전체 현황":
         if dept_col in label_encoders:
             top5[dept_col] = label_encoders[dept_col].inverse_transform(top5[dept_col])
         show_table_centered(top5)
-        # ---------------------------
-        # 최고 위험 조직 한 곳에 대한 원인 요약
-        # ---------------------------
         if len(dept_risk) > 0:
             top_group_val = dept_risk.index[0]
             top_group_prob = float(dept_risk.iloc[0])
-
-            # 조직명 복원
             if dept_col in label_encoders:
                 try:
                     top_group_label = label_encoders[dept_col].inverse_transform([int(top_group_val)])[0]
@@ -1191,14 +1508,11 @@ if menu == "전체 현황":
 
             dept_df = df_pred[df_pred[dept_col] == top_group_val]
             global_rate = df['상태'].mean()
-
             reason_phrases = []
 
             for var in top_features[:5]:
                 if var not in df.columns:
                     continue
-
-                # 1) 숫자형 변수 원인
                 if pd.api.types.is_numeric_dtype(df[var]):
                     try:
                         dept_mean = float(dept_df[var].mean())
@@ -1206,203 +1520,144 @@ if menu == "전체 현황":
                         if np.isnan(overall_mean) or overall_mean == 0:
                             continue
                         ratio = dept_mean / overall_mean
-
                         lower_bad = ['기본급', '연봉', '급여', '월급', '만족도', '근무연수']
                         higher_bad = ['연장근무', '야근', '입사전이직횟수', '이직횟수']
-
-                        # 급여/근무연수 등 낮으면 안 좋은 경우
                         if any(k in var for k in lower_bad) and ratio <= 0.9:
-                            phrase = f"{var} 수준이 전체 대비 낮은 편"
-                            reason_phrases.append(phrase)
-
-                        # 야근/연장근무/이직횟수 등 높으면 안 좋은 경우
+                            reason_phrases.append(f"{var} 수준이 전체 대비 낮은 편")
                         elif any(k in var for k in higher_bad) and ratio >= 1.1:
-                            # 이직횟수 계열만 살짝 문장 다르게
                             if '입사전이직횟수' in var or '이직횟수' in var:
-                                phrase = "입사 전 이직횟수가 높은 인력이 다수 포함된"
+                                reason_phrases.append("입사 전 이직횟수가 높은 인력이 다수 포함된")
                             else:
-                                phrase = f"{var} 수준이 전체 대비 높은 편"
-                            reason_phrases.append(phrase)
-
+                                reason_phrases.append(f"{var} 수준이 전체 대비 높은 편")
                     except Exception:
                         pass
-
-                # 2) 범주형 변수 원인 (라벨 인코딩된 컬럼)
                 if var in label_encoders:
                     try:
                         grp_rate_all = df.groupby(var)['상태'].mean()
                         grp_rate_dept = dept_df.groupby(var)['상태'].mean()
-
                         if len(grp_rate_dept) == 0:
                             continue
-
                         cat_val = grp_rate_dept.idxmax()
                         if cat_val in grp_rate_all.index:
                             dept_rate = grp_rate_dept[cat_val]
                             overall_cat_rate = grp_rate_all[cat_val]
-
-                            # 해당 범주에서 퇴직률이 전체보다 꽤 높은 경우만 사용
                             if dept_rate >= overall_cat_rate * 1.2 and dept_rate > global_rate:
                                 try:
                                     cat_label = label_encoders[var].inverse_transform([int(cat_val)])[0]
                                 except Exception:
                                     cat_label = str(cat_val)
-                                phrase = f"{var} 중 '{cat_label}' 그룹의 퇴직률이 전체 대비 높은 편"
-                                reason_phrases.append(phrase)
+                                reason_phrases.append(f"{var} 중 '{cat_label}' 그룹의 퇴직률이 전체 대비 높은 편")
                     except Exception:
                         pass
-
-                # 이유는 최대 2개까지만
                 if len(reason_phrases) >= 2:
                     break
 
-            # 문장 조립
-            head_sentence = (
-                f"{top_group_label} 조직의 평균 예측 퇴직위험은 **{top_group_prob*100:.1f}%**입니다."
-            )
-
+            head_sentence = f"{top_group_label} 조직의 평균 예측 퇴직위험은 **{top_group_prob*100:.1f}%**입니다."
             if reason_phrases:
                 if len(reason_phrases) == 1:
-                    tail_sentence = (
-                        f"조직 내 {reason_phrases[0]} 것이 퇴직 위험 상승에 영향을 준 것으로 보입니다."
-                    )
+                    tail_sentence = f"조직 내 {reason_phrases[0]} 것이 퇴직 위험 상승에 영향을 준 것으로 보입니다."
                 else:
-                    tail_sentence = (
-                        f"조직 내 {reason_phrases[0]}이며 {reason_phrases[1]} 것이 "
-                        f"퇴직 위험 상승에 영향을 준 것으로 보입니다."
-                    )
+                    tail_sentence = (f"조직 내 {reason_phrases[0]}이며 {reason_phrases[1]} 것이 "
+                                     f"퇴직 위험 상승에 영향을 준 것으로 보입니다.")
             else:
-                tail_sentence = (
-                    "단일 요인보다는 여러 변수의 복합적인 패턴이 반영된 결과로 해석됩니다."
-                )
-
+                tail_sentence = "단일 요인보다는 여러 변수의 복합적인 패턴이 반영된 결과로 해석됩니다."
             st.markdown(head_sentence + "  \n" + tail_sentence)
 
     st.divider()
     st.subheader("개인별 예측 퇴직 위험 순위")
-
-    # 1) 전체 직원에 대한 예측 확률 계산
     df_pred2 = df.copy()
     df_pred2['퇴직예측확률'] = _all_proba
-
-    # 2) 🔥 재직자만 대상으로 TOP10 산출 (상태 == 0)
     if '상태' in df_pred2.columns:
         active_pred = df_pred2[df_pred2['상태'] == 0].copy()
     else:
-        # 혹시 모를 예외 상황 대비: 상태 없으면 전체 사용
         active_pred = df_pred2.copy()
 
     if len(active_pred) == 0:
         st.info("재직 중인 직원이 없어 개인별 예측 순위를 표시할 수 없습니다.")
     else:
         top10 = active_pred.sort_values('퇴직예측확률', ascending=False).head(10)
-
         disp_cols = [c for c in ['사원번호','이름','직무','소속조직','팀','직책'] if c in df.columns] + ['퇴직예측확률']
         top10_disp = top10[disp_cols].rename(columns={'퇴직예측확률':'퇴직위험확률'})
         top10_disp['퇴직위험확률'] = top10_disp['퇴직위험확률'].apply(lambda x: f"{x*100:.1f}%")
-
-        # 범주형 복원
         for c in ['직무','소속조직','팀','직책']:
             if c in label_encoders and c in top10_disp.columns:
                 top10_disp[c] = label_encoders[c].inverse_transform(top10_disp[c])
-
         show_table_centered(top10_disp)
-
-    # 상관분석
-    st.markdown("---")
-    st.subheader("숫자형 변수별 퇴직 영향")
-    num_cols = [c for c in X.columns if (c not in label_encoders) and pd.api.types.is_numeric_dtype(df[c])]
-   
-    if len(num_cols) > 0:
-        pearson = df[num_cols + ['상태']].corr(numeric_only=True)['상태'].drop('상태').sort_values(key=np.abs, ascending=False)
-        pearson_df = pearson.reset_index().rename(columns={'index':'변수','상태':'피어슨 상관(퇴직)'})
-        pearson_df['피어슨 상관(퇴직)'] = pearson_df['피어슨 상관(퇴직)'].round(2)
-        show_table_centered(pearson_df)
-        # Bar: Unified Blue Gradient
-        fig_corr = px.bar(x=pearson_df['변수'], y=pearson_df['피어슨 상관(퇴직)'],
-                          color=pearson_df['피어슨 상관(퇴직)'], color_continuous_scale=[(0, '#A5E6F3'), (1, COLORS['primary'])])
-        fig_corr.update_layout(yaxis_title="상관계수", height=300)
-        st.plotly_chart(set_font(fig_corr), use_container_width=True)
-
-    st.subheader("범주형 변수별 퇴직 영향")
-    cat_vs = []
-    for c in [col for col in CAT_COLS if col in df.columns]:
-        try:
-            cat_vs.append((c, cramers_v(df[c], df['상태'])))
-        except Exception:
-            pass
-    if len(cat_vs) > 0:
-        cv_df = pd.DataFrame(cat_vs, columns=['변수','Cramér’s V']).sort_values('Cramér’s V', ascending=False)
-        cv_df['Cramér’s V'] = cv_df['Cramér’s V'].round(2)
-        show_table_centered(cv_df)
-        st.markdown("""
-<b>상관 해설</b><br>
-- 피어슨: 연속형 변수와 퇴직(이직) 간 선형 관련성 강도<br>
-- Cramér’s V: 범주형 변수와 퇴직 간 관련성 강도(0~1)<br>
-- 값이 +/높을수록 퇴직과의 연관이 크므로 주의 관리가 필요합니다.
-        """, unsafe_allow_html=True)
 
     st.markdown("---")
     with st.expander("모델 설명 및 신뢰도", expanded=False):
-        # 1) 임계값 기준 혼동행렬 (테스트셋 기준)
-        st.subheader(f"임계값 {th:.2f} 기준 혼동행렬 (테스트셋)")
-        y_pred_th = (metrics['y_proba_test'] >= th).astype(int)
-        cm_th = confusion_matrix(metrics['y_test'], y_pred_th)
-        fig_cm_th = px.imshow(
-            cm_th,
-            labels=dict(x="예측", y="실제", color="건수"),
-            x=['재직(0)','퇴직(1)'],
-            y=['재직(0)','퇴직(1)'],
-            text_auto=True,
-            color_continuous_scale=[(0, '#A5E6F3'), (1, COLORS['primary'])],
-            title=f"혼동행렬 (임계값 {th:.2f})"
-        )
-        st.plotly_chart(set_font(fig_cm_th), use_container_width=True)
+
+        # 쉬운 설명
+        _acc = metrics['accuracy'] * 100
+        _f1 = metrics['f1']
+        _roc = metrics['roc_auc']
+
+        # 신뢰도 등급
+        if _roc >= 0.9:
+            _grade = "매우 높음"
+        elif _roc >= 0.8:
+            _grade = "높음"
+        elif _roc >= 0.7:
+            _grade = "보통"
+        else:
+            _grade = "낮음"
+
+        cm = metrics['confusion_matrix']
+        tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+        _total_test = tn + fp + fn + tp
+        _caught = tp
+        _missed = fn
+        _false_alarm = fp
 
         st.markdown(f"""
-<b>혼동행렬 해설</b><br>
-- 세로축은 <b>실제 상태</b>, 가로축은 <b>모델 예측</b>입니다.<br>
-- 왼쪽 위(재직→재직), 오른쪽 아래(퇴직→퇴직)가 클수록 모델이 현실을 잘 따라갑니다.<br>
-- 오른쪽 위(재직인데 퇴직으로 예측)는 <b>“과잉 경보”</b>, 
-  왼쪽 아래(퇴직인데 재직으로 예측)는 <b>“놓친 퇴직자”</b>에 해당합니다.<br>
-- 회사 정책에 따라 <b>“놓치는 퇴직자를 줄일지 / 과잉 경보를 줄일지”</b> 우선순위를 정하고, 
-  임계값({th:.2f})을 조정해 사용할 수 있습니다.
-        """, unsafe_allow_html=True)
+---
+### 이 예측 모델, 쉽게 이해하기
+
+**1. 이 모델은 무엇을 하나요?**
+
+직원들의 근속연수, 직무, 조직, 급여 등 **여러 정보를 종합**해서,
+"이 직원이 앞으로 퇴직할 가능성이 높은지 낮은지"를 **확률(%)**로 알려줍니다.
+예를 들어 퇴직 위험 72%라면, 과거에 비슷한 조건의 직원 100명 중 약 72명이 퇴직했다는 의미입니다.
+
+**2. 얼마나 정확한가요?**
+
+모델을 학습에 사용하지 않은 별도 데이터(**{_total_test}명**)로 검증한 결과입니다.
+- 전체 정확도: **{_acc:.0f}%** (100명 중 약 {_acc:.0f}명을 맞춤)
+- 실제 퇴직자 {tp + fn}명 중 **{_caught}명을 사전에 포착**했고, {_missed}명은 놓쳤습니다.
+- 재직자 중 **{_false_alarm}명은 퇴직으로 잘못 예측**했습니다 (과잉 경보).
+- 모델 신뢰도 등급: **{_grade}**
+
+**3. 영향도(%)는 무엇인가요?**
+
+모델이 퇴직 여부를 판단할 때 **어떤 정보를 얼마나 중요하게 봤는지**를 비율로 나타낸 것입니다.
+예: 핵심인재 여부 38%, 근속연수 15% → 모델이 퇴직을 예측할 때 핵심인재 여부를 가장 많이 참고했다는 뜻입니다.
+
+**4. 상관계수 / 관련도는 무엇인가요?**
+
+- **상관계수**(-1 ~ +1): 숫자형 변수와 퇴직의 관계입니다.
+  - +0.5 이상이면 "그 값이 높을수록 퇴직이 많다"
+  - -0.5 이하면 "그 값이 높을수록 퇴직이 적다"
+  - 0에 가까우면 퇴직과 별 관련이 없습니다.
+- **관련도**(0 ~ 1): 범주형 변수(직무, 조직 등)와 퇴직의 관계입니다.
+  - 1에 가까울수록 "어떤 그룹이냐에 따라 퇴직 비율 차이가 크다"는 뜻입니다.
+
+**5. 주의할 점**
+
+- 이 모델은 **과거 데이터의 패턴**을 학습한 것이므로, 미래를 100% 맞추지는 못합니다.
+- 경기 변동, 조직개편, 개인 사정 등 **데이터에 없는 요인은 반영되지 않습니다.**
+- "퇴직 위험이 높다" = "반드시 퇴직한다"가 아니라, **"관심을 가지고 살펴볼 필요가 있다"**는 신호입니다.
+- HR담당자와 리더의 **정성적 판단과 함께 보조 도구로 활용**하는 것을 권장합니다.
+
+---
+        """)
 
         st.divider()
 
-        # 2) 모델 설명 + 성능 요약
-        st.subheader("모델 설명 및 신뢰도")
-        colA, colB = st.columns([1,1])
+        # 혼동행렬 (1개로 통합)
+        st.subheader("예측 정확도 상세")
+        colA, colB = st.columns([1, 1])
 
         with colA:
-            st.markdown("""
-- 이 대시보드는 **XGBoost 기반 이진 분류 모델**로,  
-  각 직원의 특성을 입력받아 **퇴직(1) / 재직(0) 확률**을 예측합니다.  
-- 직무·조직·연장근무·보상수준 등 여러 변수가 <b>서로 섞여 작용하는 패턴</b>
-  (비선형·상호작용 효과)을 함께 학습합니다.  
-- 숫자는 “미래를 완벽히 맞춘다”는 의미가 아니라,  
-  **지금까지의 데이터 기준으로 본 ‘퇴직 위험 신호의 강도’**를 보여주는 참고 지표입니다.  
-- 경기·조직개편·경영전략 변화처럼 데이터에 없는 외부 요인은 반영하지 못하므로,  
-  **HR/리더의 정성적 판단과 함께 쓰는 보조 도구**로 보는 것이 적절합니다.
-            """)
-
-            st.markdown("""
-**모델 성능 요약 (테스트 데이터 기준)**  
-
-- 정확도(Accuracy): 전체 예측 중 맞춘 비율 → **{:.1f}%**  
-- F1 Score: 퇴직자를 놓치지 않으면서도, 과잉 경보를 얼마나 줄였는지 보는 균형 지표 → **{:.2f}**  
-- ROC AUC: 재직자와 퇴직자를 얼마나 잘 구분하는지(1에 가까울수록 좋음) → **{:.2f}**  
-- PR-AUC: 실제 퇴직자가 적은 상황에서,  
-  '위험이라고 찍은 사람들 중 진짜 퇴직자 비율'을 얼마나 잘 유지하는지 보는 지표 → **{:.2f}**  
-            """.format(
-                metrics['accuracy']*100,
-                metrics['f1'],
-                metrics['roc_auc'],
-                metrics['pr_auc']
-            ))
-
-        with colB:
             cm = metrics['confusion_matrix']
             fig_cm = px.imshow(
                 cm,
@@ -1415,13 +1670,51 @@ if menu == "전체 현황":
             )
             st.plotly_chart(set_font(fig_cm), use_container_width=True)
 
-            st.markdown("""
-<b>테스트셋 혼동행렬 해설</b><br>
-- 모델을 학습에 쓰지 않은 데이터(테스트셋)에 대해,  
-  실제/예측이 어떻게 다른지 요약한 표입니다.<br>
-- 이 지표를 통해 <b>“모델이 과하게 경보를 울리는지 / 반대로 너무 둔감한지”</b>를 점검할 수 있습니다.<br>
-- 필요 시, HR 정책에 맞춰 <b>임계값과 활용 방식</b>을 함께 조정하는 것을 권장합니다.
+        with colB:
+            # 혼동행렬 쉬운 해석
+            cm = metrics['confusion_matrix']
+            tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+            st.markdown(f"""
+            <div style="background-color: #F8FAFC; padding: 16px; border-radius: 8px; border: 1px solid #E2E8F0;">
+                <p style="font-size: 14px; color: #334155; line-height: 2.0; margin: 0;">
+                    <b>재직자를 재직으로 맞춘 경우:</b> {tn}명<br>
+                    <b>퇴직자를 퇴직으로 맞춘 경우:</b> {tp}명<br>
+                    <b>재직자인데 퇴직으로 잘못 예측 (과잉 경보):</b> {fp}명<br>
+                    <b>퇴직자인데 재직으로 잘못 예측 (놓친 퇴직자):</b> {fn}명
+                </p>
+            </div>
             """, unsafe_allow_html=True)
+
+        st.divider()
+
+        # 성능 지표 상세
+        st.subheader("성능 지표 상세")
+        st.markdown("""
+**모델 성능 요약 (테스트 데이터 기준)**
+
+- 정확도(Accuracy): 전체 예측 중 맞춘 비율 → **{:.1f}%**
+- F1 Score: 퇴직자를 놓치지 않으면서도, 과잉 경보를 얼마나 줄였는지 보는 균형 지표 → **{:.2f}**
+- ROC AUC: 재직자와 퇴직자를 얼마나 잘 구분하는지(1에 가까울수록 좋음) → **{:.2f}**
+- PR-AUC: 실제 퇴직자가 적은 상황에서,
+  '위험이라고 찍은 사람들 중 진짜 퇴직자 비율'을 얼마나 잘 유지하는지 보는 지표 → **{:.2f}**
+        """.format(
+            metrics['accuracy']*100,
+            metrics['f1'],
+            metrics['roc_auc'],
+            metrics['pr_auc']
+        ))
+
+        st.divider()
+
+        # 모델 설명
+        st.subheader("모델 작동 원리")
+        st.markdown("""
+- 이 대시보드는 **XGBoost 기반 이진 분류 모델**로,
+  각 직원의 특성을 입력받아 **퇴직(1) / 재직(0) 확률**을 예측합니다.
+- 직무, 조직, 연장근무, 보상수준 등 여러 변수가 서로 섞여 작용하는 패턴을 함께 학습합니다.
+- 경기, 조직개편, 경영전략 변화처럼 데이터에 없는 외부 요인은 반영하지 못하므로,
+  **HR/리더의 정성적 판단과 함께 쓰는 보조 도구**로 보는 것이 적절합니다.
+        """)
 
 # =========================
 # 2) 핵심인재 현황
@@ -1524,16 +1817,22 @@ if menu == "핵심인재 현황":
                 st.subheader("퇴직위험 등급 분포")
                 risk_labels = ['고위험 (≥70%)', '중위험 (30~70%)', '저위험 (<30%)']
                 risk_values = [high_cnt, mid_cnt, low_cnt]
-                risk_colors = ['#EF4444', '#F59E0B', '#10B981']
+                risk_colors = ['#F4A7A7', '#FDE68A', '#48C0D8']
                 fig_risk = go.Figure(data=[go.Pie(
                     labels=risk_labels, values=risk_values, hole=0.55,
-                    marker_colors=risk_colors, textinfo='label+value+percent',
-                    textposition='outside'
+                    marker_colors=risk_colors,
+                    textinfo='percent',
+                    textposition='inside',
+                    insidetextfont=dict(size=13),
+                    hovertemplate='%{label}<br>%{value}명 (%{percent})<extra></extra>'
                 )])
-                fig_risk.update_layout(height=350, showlegend=True,
-                    legend=dict(orientation='h', yanchor='bottom', y=-0.15, xanchor='center', x=0.5))
-                fig_risk.add_annotation(text=f"재직 핵심인재<br>{len(core_active)}명",
-                    showarrow=False, font=dict(size=14, color=TEXT_COLOR))
+                fig_risk.update_layout(
+                    height=350, showlegend=True,
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='left', x=1.02),
+                    margin=dict(l=20, r=130, t=20, b=20)
+                )
+                fig_risk.add_annotation(text=f"재직<br>핵심인재<br>{len(core_active)}명",
+                    showarrow=False, font=dict(size=13, color=TEXT_COLOR))
                 st.plotly_chart(set_font(fig_risk), use_container_width=True)
 
             with chart_col2:
@@ -1551,10 +1850,14 @@ if menu == "핵심인재 현황":
                                 org_labels.append(str(idx))
                         else:
                             org_labels.append(str(idx))
+                    def _risk_color(v):
+                        if v >= 0.70: return '#F4A7A7'
+                        elif v >= 0.30: return '#FDE68A'
+                        else: return '#48C0D8'
                     fig_org = go.Figure(go.Bar(
                         x=org_risk.values * 100, y=org_labels,
                         orientation='h',
-                        marker_color=[f'rgba(239,68,68,{max(0.3, v)})' for v in org_risk.values],
+                        marker_color=[_risk_color(v) for v in org_risk.values],
                         text=[f'{v*100:.1f}%' for v in org_risk.values],
                         textposition='outside'
                     ))
@@ -1585,11 +1888,11 @@ if menu == "핵심인재 현황":
             # 위험 등급 컬럼 추가
             def _risk_badge(prob):
                 if prob >= 0.70:
-                    return '🔴 고위험'
+                    return '<span style="color:#F4A7A7;">●</span> 고위험'
                 elif prob >= 0.30:
-                    return '🟡 중위험'
+                    return '<span style="color:#FDE68A;">●</span> 중위험'
                 else:
-                    return '🟢 저위험'
+                    return '<span style="color:#48C0D8;">●</span> 저위험'
             top10_disp['위험등급'] = _top10['퇴직예측확률'].apply(_risk_badge)
             top10_show.insert(-1, '위험등급')
 
@@ -1724,7 +2027,12 @@ if menu == "핵심인재 현황":
                 if c in label_encoders and c in disp.columns:
                     disp[c] = label_encoders[c].inverse_transform(disp[c])
 
-            show_table_centered(disp[final_cols])
+            import streamlit.components.v1 as components
+            _row_count = len(disp[final_cols])
+            _table_height = min(max(400, _row_count * 45 + 60), 800)
+            _html = build_core_talent_html(disp[final_cols])
+            components.html(_html, height=_table_height, scrolling=True)
+            st.caption("행을 클릭하면 예측사유 상세를 확인할 수 있습니다.")
         else:
             st.info("재직 중인 핵심인재가 없어 예측 리스트를 표시할 수 없습니다.")
 
@@ -1944,11 +2252,11 @@ if menu == "개인별 현황":
                 number={'suffix': '%', 'font': {'size': 36}},
                 gauge={
                     'axis': {'range': [0, 100], 'tickwidth': 1},
-                    'bar': {'color': '#EF4444' if pred_prob >= 0.7 else '#F59E0B' if pred_prob >= 0.3 else '#10B981'},
+                    'bar': {'color': '#F4A7A7' if pred_prob >= 0.7 else '#FDE68A' if pred_prob >= 0.3 else '#48C0D8'},
                     'steps': [
-                        {'range': [0, 30], 'color': '#ECFDF5'},
-                        {'range': [30, 70], 'color': '#FFFBEB'},
-                        {'range': [70, 100], 'color': '#FEF2F2'}
+                        {'range': [0, 30], 'color': '#E8F8FB'},
+                        {'range': [30, 70], 'color': '#FFFDF0'},
+                        {'range': [70, 100], 'color': '#FDF3F3'}
                     ],
                     'threshold': {
                         'line': {'color': '#1F2937', 'width': 3},
@@ -1968,12 +2276,13 @@ if menu == "개인별 현황":
                 marker_color=COLORS['primary'], opacity=0.7,
                 name='전체 직원 분포'
             ))
+            _vline_color = '#F4A7A7' if pred_prob >= 0.7 else '#FDE68A' if pred_prob >= 0.3 else '#48C0D8'
             fig_hist.add_vline(
                 x=pred_prob * 100,
-                line_dash="dash", line_color="#EF4444", line_width=3,
+                line_dash="dash", line_color=_vline_color, line_width=3,
                 annotation_text=f"이 직원: {pred_prob*100:.1f}%",
                 annotation_position="top",
-                annotation_font_color="#EF4444"
+                annotation_font_color=_vline_color
             )
             fig_hist.update_layout(
                 xaxis_title='퇴직 예측 확률(%)', yaxis_title='직원 수',
@@ -1984,15 +2293,15 @@ if menu == "개인별 현황":
 
         # 위험등급 배지
         if pred_prob >= 0.70:
-            badge_color, badge_text = '#EF4444', '🔴 고위험'
+            badge_color, badge_text = '#F4A7A7', '🟠 고위험'
         elif pred_prob >= 0.30:
-            badge_color, badge_text = '#F59E0B', '🟡 중위험'
+            badge_color, badge_text = '#FDE68A', '🟡 중위험'
         else:
-            badge_color, badge_text = '#10B981', '🟢 저위험'
+            badge_color, badge_text = '#48C0D8', '🔵 저위험'
 
         st.markdown(f"""
         <div style="background-color: {badge_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
-            <span style="color: white; font-size: 16px; font-weight: 600;">
+            <span style="color: #334155; font-size: 16px; font-weight: 600;">
                 사원번호 {emp_row.get('사원번호', pd.Series(['-'])).iloc[0]} /
                 {emp_row.get('이름', pd.Series(['-'])).iloc[0]} — {badge_text} (퇴직 확률: {pred_prob*100:.1f}%)
             </span>
@@ -2017,7 +2326,7 @@ if menu == "개인별 현황":
                 if _emp_v in _grp.index:
                     _gr = _grp[_emp_v] * 100
                     _ov = df['상태'].mean() * 100
-                    _imp = '⬆️ 위험 증가' if _gr > _ov * 1.1 else ('⬇️ 위험 감소' if _gr < _ov * 0.9 else '— 평균 수준')
+                    _imp = '<span style="background:#F4A7A7;color:#7a2a2a;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _gr > _ov * 1.1 else ('<span style="background:#D1FAE5;color:#065f46;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 감소</span>' if _gr < _ov * 0.9 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>')
                     _reason_rows.append({'변수': _rf, '개인 값': str(_vl), '해당그룹 퇴직률': f"{_gr:.1f}%", '전체 평균 퇴직률': f"{_ov:.1f}%", '영향': _imp})
             else:
                 _avg = float(df[_rf].mean())
@@ -2029,7 +2338,7 @@ if menu == "개인별 현황":
                     _u = "만원" if any(k in _rf for k in _sal) else ("년" if any(k in _rf for k in _yr) else ("세" if any(k in _rf for k in _age) else ""))
                     _vs = f"{_emp_v:,.0f}{_u}" if _u else f"{_emp_v:,.1f}"
                     _as = f"{_avg:,.0f}{_u}" if _u else f"{_avg:,.1f}"
-                    _imp = '⬆️ 위험 증가' if _ratio < 0.7 or _ratio > 1.3 else '— 평균 수준'
+                    _imp = '<span style="background:#F4A7A7;color:#7a2a2a;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _ratio < 0.7 or _ratio > 1.3 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>'
                     _reason_rows.append({'변수': _rf, '개인 값': _vs, '전체 평균': _as, '평균 대비': f"{_ratio*100:.0f}%", '영향': _imp})
         if _reason_rows:
             show_table_centered(pd.DataFrame(_reason_rows))
@@ -2169,11 +2478,11 @@ if menu == "개인별 현황":
                         overall_turnover = df['상태'].mean() * 100
                         diff_turnover = cat_turnover - overall_turnover
                         if diff_turnover > 0:
-                            risk_tag = f"🔴 전체 대비 +{diff_turnover:.1f}%p 높음"
+                            risk_tag = f"🟠 전체 대비 +{diff_turnover:.1f}%p 높음"
                         elif diff_turnover < -1:
-                            risk_tag = f"🟢 전체 대비 {diff_turnover:.1f}%p 낮음"
+                            risk_tag = f"🔵 전체 대비 {diff_turnover:.1f}%p 낮음"
                         else:
-                            risk_tag = "⚪ 전체 평균과 유사"
+                            risk_tag = "🩶 전체 평균과 유사"
                         _cat_rows.append({
                             '변수': var,
                             '해당 직원': str(_el),
@@ -2244,7 +2553,7 @@ if menu == "개인별 현황":
 
             # --- 수치형 변수 상세 비교 테이블 ---
             if _num_rows:
-                st.markdown("##### 📊 수치형 변수 상세 비교")
+                st.markdown("##### 수치형 변수 상세 비교")
                 show_table_centered(pd.DataFrame(_num_rows))
 
                 # 인사이트 코멘트 자동 생성
@@ -2259,12 +2568,12 @@ if menu == "개인별 현황":
                     else:
                         _insights.append(f"- **{var_name}**: 전체 평균과 **유사한 수준**입니다. ({row['개인값']} vs 평균 {row['전체 평균']}, {row['분위수']})")
                 if _insights:
-                    with st.expander("💡 수치형 변수 해석 보기", expanded=True):
+                    with st.expander("수치형 변수 해석 보기", expanded=True):
                         st.markdown("\n".join(_insights))
 
             # --- 범주형 변수 상세 비교 테이블 ---
             if _cat_rows:
-                st.markdown("##### 🏷️ 범주형 변수 상세 비교")
+                st.markdown("##### 범주형 변수 상세 비교")
                 show_table_centered(pd.DataFrame(_cat_rows))
 
                 # 범주형 인사이트
@@ -2273,14 +2582,14 @@ if menu == "개인별 현황":
                     var_name = row['변수']
                     val = row['해당 직원']
                     risk = row['위험 수준']
-                    if '🔴' in risk:
+                    if '🟠' in risk:
                         _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹은 퇴직률이 전체 평균보다 **높아** 주의가 필요합니다.")
-                    elif '🟢' in risk:
+                    elif '🔵' in risk:
                         _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹은 퇴직률이 전체 평균보다 **낮은** 편입니다.")
                     else:
                         _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹의 퇴직률은 전체 평균과 **유사**합니다.")
                 if _cat_insights:
-                    with st.expander("💡 범주형 변수 해석 보기", expanded=True):
+                    with st.expander("범주형 변수 해석 보기", expanded=True):
                         st.markdown("\n".join(_cat_insights))
 
         # =========================

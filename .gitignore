@@ -4,3 +4,7 @@ __pycache__/
 *.csv
 *.xlsx
 .env
+.vscode/
+build/
+dist/
+*.spec
