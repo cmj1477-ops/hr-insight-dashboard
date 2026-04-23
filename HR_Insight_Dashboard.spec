@@ -62,7 +62,30 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'IPython', 'jupyter', 'notebook'],
+    excludes=[
+        # UI / 시각화 (불필요)
+        'tkinter', 'matplotlib', 'IPython', 'jupyter', 'notebook',
+        'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'wx',
+        'panel', 'bokeh', 'holoviews', 'hvplot',
+        # 딥러닝 (불필요)
+        'torch', 'torchvision', 'torchaudio',
+        'tensorflow', 'keras', 'tf2onnx',
+        'onnxruntime', 'onnx',
+        'transformers', 'tokenizers', 'accelerate', 'diffusers',
+        # 수치계산 옵셔널 (불필요)
+        'numba', 'llvmlite', 'cupy',
+        # 클라우드 SDK (불필요)
+        'boto3', 'botocore', 'aiobotocore', 's3transfer',
+        'google', 'googleapiclient', 'google.cloud',
+        'azure',
+        # 미디어 (불필요)
+        'av', 'cv2', 'imageio', 'PIL',
+        # 기타 대형 패키지 (불필요)
+        'dask', 'distributed', 'ray',
+        'sqlalchemy', 'alembic',
+        'grpc', 'grpcio',
+        'pyspark', 'pyarrow.gandiva',
+    ],
     noarchive=False,
     optimize=0,
 )

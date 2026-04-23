@@ -20,7 +20,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install "numpy<2"
-          pip install -r requirements.txt
+          pip install streamlit pandas plotly scikit-learn scipy xgboost openpyxl xlrd
+          pip install "shap" --no-deps
+          pip install slicer packaging cloudpickle tqdm
           pip install pyinstaller
 
       - name: Build EXE with spec file
