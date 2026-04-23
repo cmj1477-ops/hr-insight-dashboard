@@ -14,19 +14,33 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
+          pip install "numpy<2"
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build EXE
+      - name: Build EXE with spec file
         run: |
-          pyinstaller --name "HR_Insight_Dashboard" --onefile --add-data "pj7.py;." --collect-all streamlit --collect-all plotly --collect-data xgboost --collect-all sklearn --hidden-import="xgboost" --hidden-import="xgboost.core" --hidden-import="xgboost.sklearn" --hidden-import="sklearn.utils._typedefs" --hidden-import="sklearn.utils._heap" --hidden-import="sklearn.utils._sorting" --hidden-import="sklearn.utils._vector_sentinel" --hidden-import="scipy.special._cdflib" --noconfirm run.py
+          pyinstaller HR_Insight_Dashboard.spec --noconfirm
 
-      - name: Upload EXE
+      - name: Create launch script
+        shell: cmd
+        run: |
+          echo @echo off > "dist\실행하기.bat"
+          echo start "" "%~dp0HR_Insight_Dashboard\HR_Insight_Dashboard.exe" >> "dist\실행하기.bat"
+
+      - name: Package as ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\HR_Insight_Dashboard, dist\실행하기.bat -DestinationPath dist\HR_Insight_Dashboard_Windows.zip
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: HR_Insight_Dashboard_Windows
-          path: dist/HR_Insight_Dashboard.exe
+          path: dist\HR_Insight_Dashboard_Windows.zip
+          retention-days: 30

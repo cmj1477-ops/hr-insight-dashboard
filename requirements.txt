@@ -1,9 +1,10 @@
 streamlit
 pandas
-numpy
+numpy<2
 plotly
 scikit-learn
 scipy
 xgboost
+shap
 openpyxl
 xlrd
