@@ -78,36 +78,58 @@ st.markdown(f"""
         color: {TEXT_COLOR};
     }}
 
-    /* 헤더 숨김 (사이드바 펼치기 버튼은 유지) */
+    /* 헤더 내부 도구만 숨김 (헤더 자체와 사이드바 펼치기 버튼은 유지) */
     header [data-testid="stToolbar"],
     header [data-testid="stDecoration"],
     header [data-testid="stStatusWidget"],
-    header .stDeployButton {{
+    header [data-testid="stDeployButton"],
+    header .stDeployButton,
+    [data-testid="stMainMenu"] {{
         visibility: hidden !important;
     }}
-    header {{
+    header,
+    [data-testid="stHeader"] {{
         background: transparent !important;
     }}
-    /* 사이드바 접힘 상태에서 펼치기 버튼 표시 */
-    [data-testid="collapsedControl"] {{
+
+    /* 사이드바 펼치기/접기 버튼 - 모든 Streamlit 버전 대응 */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarHeader"] button,
+    button[aria-label="Open sidebar"],
+    button[aria-label="Close sidebar"],
+    button[kind="header"],
+    button[kind="headerNoPadding"] {{
         visibility: visible !important;
         display: flex !important;
-        color: #2A9BB0 !important;
+        opacity: 1 !important;
         z-index: 999999 !important;
+        pointer-events: auto !important;
     }}
-    [data-testid="collapsedControl"] svg {{
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg,
+    button[aria-label="Open sidebar"] svg,
+    button[aria-label="Close sidebar"] svg {{
         fill: #2A9BB0 !important;
         color: #2A9BB0 !important;
         width: 24px !important;
         height: 24px !important;
     }}
-    [data-testid="collapsedControl"] button {{
+    [data-testid="collapsedControl"] button,
+    [data-testid="stSidebarCollapsedControl"] button,
+    button[aria-label="Open sidebar"],
+    button[aria-label="Close sidebar"] {{
         background: rgba(255, 255, 255, 0.95) !important;
         border: 1px solid #E5E7EB !important;
         border-radius: 8px !important;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
     }}
-    [data-testid="collapsedControl"] button:hover {{
+    [data-testid="collapsedControl"] button:hover,
+    [data-testid="stSidebarCollapsedControl"] button:hover,
+    button[aria-label="Open sidebar"]:hover,
+    button[aria-label="Close sidebar"]:hover {{
         background: #F0FAFC !important;
         border-color: #48C0D8 !important;
     }}
