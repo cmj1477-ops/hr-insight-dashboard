@@ -78,8 +78,39 @@ st.markdown(f"""
         color: {TEXT_COLOR};
     }}
 
-    /* 헤더 숨김 */
-    header {{visibility: hidden;}}
+    /* 헤더 숨김 (사이드바 펼치기 버튼은 유지) */
+    header [data-testid="stToolbar"],
+    header [data-testid="stDecoration"],
+    header [data-testid="stStatusWidget"],
+    header .stDeployButton {{
+        visibility: hidden !important;
+    }}
+    header {{
+        background: transparent !important;
+    }}
+    /* 사이드바 접힘 상태에서 펼치기 버튼 표시 */
+    [data-testid="collapsedControl"] {{
+        visibility: visible !important;
+        display: flex !important;
+        color: #2A9BB0 !important;
+        z-index: 999999 !important;
+    }}
+    [data-testid="collapsedControl"] svg {{
+        fill: #2A9BB0 !important;
+        color: #2A9BB0 !important;
+        width: 24px !important;
+        height: 24px !important;
+    }}
+    [data-testid="collapsedControl"] button {{
+        background: rgba(255, 255, 255, 0.95) !important;
+        border: 1px solid #E5E7EB !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+    }}
+    [data-testid="collapsedControl"] button:hover {{
+        background: #F0FAFC !important;
+        border-color: #48C0D8 !important;
+    }}
     
     /* 메인 컨테이너 */
     .block-container {{
