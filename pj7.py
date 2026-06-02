@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix, average_precision_score
 from scipy.stats import chi2_contingency
 
@@ -92,14 +92,27 @@ st.markdown(f"""
         background: transparent !important;
     }}
 
+    /* 헤더는 보이게 (사이드바 펼치기 버튼이 헤더 안에 있음) */
+    header,
+    [data-testid="stHeader"] {{
+        visibility: visible !important;
+        display: block !important;
+        height: auto !important;
+        min-height: 3.5rem !important;
+        z-index: 999998 !important;
+    }}
+
     /* 사이드바 펼치기/접기 버튼 - 모든 Streamlit 버전 대응 */
     [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="stSidebarCollapseButton"],
     [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarHeader"],
     [data-testid="stSidebarHeader"] button,
     button[aria-label="Open sidebar"],
     button[aria-label="Close sidebar"],
+    button[aria-label*="sidebar"],
+    button[aria-label*="Sidebar"],
     button[kind="header"],
     button[kind="headerNoPadding"] {{
         visibility: visible !important;
@@ -107,27 +120,52 @@ st.markdown(f"""
         opacity: 1 !important;
         z-index: 999999 !important;
         pointer-events: auto !important;
+        position: relative !important;
     }}
+
+    /* 사이드바가 접혔을 때 펼치기 버튼을 좌측 상단에 고정 표시 */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"] {{
+        position: fixed !important;
+        top: 0.75rem !important;
+        left: 0.75rem !important;
+        width: auto !important;
+        height: auto !important;
+        transform: none !important;
+    }}
+
     [data-testid="collapsedControl"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stExpandSidebarButton"] svg,
     button[aria-label="Open sidebar"] svg,
     button[aria-label="Close sidebar"] svg {{
         fill: #2A9BB0 !important;
         color: #2A9BB0 !important;
         width: 24px !important;
         height: 24px !important;
+        display: inline-block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
     }}
     [data-testid="collapsedControl"] button,
     [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="stExpandSidebarButton"],
     button[aria-label="Open sidebar"],
     button[aria-label="Close sidebar"] {{
         background: rgba(255, 255, 255, 0.95) !important;
         border: 1px solid #E5E7EB !important;
         border-radius: 8px !important;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+        padding: 6px !important;
+        width: 36px !important;
+        height: 36px !important;
+        min-width: 36px !important;
+        min-height: 36px !important;
+        cursor: pointer !important;
     }}
     [data-testid="collapsedControl"] button:hover,
     [data-testid="stSidebarCollapsedControl"] button:hover,
+    [data-testid="stExpandSidebarButton"]:hover,
     button[aria-label="Open sidebar"]:hover,
     button[aria-label="Close sidebar"]:hover {{
         background: #F0FAFC !important;
@@ -279,6 +317,93 @@ st.markdown(f"""
     }}
     </style>
     """, unsafe_allow_html=True)
+
+# 사이드바 펼치기 버튼 안전장치 (Streamlit 내장 버튼이 안 보이는 경우 대비)
+import streamlit.components.v1 as _components
+_components.html("""
+<script>
+(function() {
+    var doc = window.parent.document;
+    if (!doc) return;
+
+    // 토글 버튼 스타일 주입 (메인 문서)
+    if (!doc.getElementById('custom-sidebar-toggle-style')) {
+        var style = doc.createElement('style');
+        style.id = 'custom-sidebar-toggle-style';
+        style.textContent = `
+            #custom-sidebar-toggle {
+                position: fixed;
+                top: 0.75rem;
+                left: 0.75rem;
+                width: 36px;
+                height: 36px;
+                background: rgba(255, 255, 255, 0.95);
+                border: 1px solid #E5E7EB;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 999999;
+                padding: 0;
+                transition: all 0.15s ease;
+            }
+            #custom-sidebar-toggle:hover {
+                background: #F0FAFC;
+                border-color: #48C0D8;
+            }
+            #custom-sidebar-toggle svg {
+                width: 20px;
+                height: 20px;
+                fill: #2A9BB0;
+            }
+        `;
+        doc.head.appendChild(style);
+    }
+
+    function ensureToggleButton() {
+        var existing = doc.getElementById('custom-sidebar-toggle');
+        if (!existing) {
+            var btn = doc.createElement('button');
+            btn.id = 'custom-sidebar-toggle';
+            btn.title = '사이드바 열기';
+            btn.innerHTML = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></svg>';
+            btn.onclick = function() {
+                var openBtn = doc.querySelector('[data-testid="stSidebarCollapsedControl"] button')
+                            || doc.querySelector('[data-testid="collapsedControl"] button')
+                            || doc.querySelector('[data-testid="stExpandSidebarButton"]')
+                            || doc.querySelector('button[aria-label="Open sidebar"]');
+                if (openBtn) {
+                    openBtn.click();
+                } else {
+                    var sb = doc.querySelector('section[data-testid="stSidebar"]');
+                    if (sb) {
+                        sb.style.transform = 'none';
+                        sb.style.visibility = 'visible';
+                        sb.style.marginLeft = '0';
+                        sb.setAttribute('aria-expanded', 'true');
+                    }
+                }
+            };
+            doc.body.appendChild(btn);
+            existing = btn;
+        }
+
+        var sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        if (sidebar) {
+            var aria = sidebar.getAttribute('aria-expanded');
+            var rect = sidebar.getBoundingClientRect();
+            var collapsed = (aria === 'false') || rect.width < 50 || (rect.left + rect.width) <= 5;
+            existing.style.display = collapsed ? 'flex' : 'none';
+        }
+    }
+
+    ensureToggleButton();
+    setInterval(ensureToggleButton, 500);
+})();
+</script>
+""", height=0)
 
 def reason_to_tags(reason: str) -> list:
     """예측사유 문자열을 태그 딕셔너리 리스트로 변환"""
@@ -591,6 +716,7 @@ CANON_MAP = {
     "재직": "상태",
     "이직": "경력입사여부",
     "이직횟수": "입사전이직횟수",
+    "경력이직횟수": "입사전이직횟수",
     # 최근 스키마 변경
     "직급": "직책"
 }
@@ -680,9 +806,9 @@ def humanize_interval_label(var: str, interval) -> str:
     age_like    = ['나이','연령']
     if any(k in var for k in salary_like):
         return _fmt_range(left, right, unit="만원")
-    elif var in years_like:
+    elif any(k in var for k in years_like):
         return _fmt_range(left, right, unit="년")
-    elif var in age_like:
+    elif any(k in var for k in age_like):
         return _fmt_range(left, right, unit="세")
     else:
         return _fmt_range(left, right, unit="")
@@ -727,7 +853,7 @@ def add_pdf_button():
             parentDoc.head.appendChild(fa);
         }
 
-        // 프린트용 CSS + 버튼 스타일 주입
+        // 프린트용 CSS + 버튼/메뉴 스타일 주입
         var style = parentDoc.createElement('style');
         style.textContent = `
             #pdf-download-btn {
@@ -752,6 +878,36 @@ def add_pdf_button():
             #pdf-download-btn:hover {
                 background-color: #3BADC7;
             }
+            #pdf-orient-menu {
+                position: fixed;
+                top: 100px;
+                right: 20px;
+                z-index: 999999;
+                background: #FFFFFF;
+                border: 1px solid #E5E7EB;
+                border-radius: 8px;
+                box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+                padding: 6px 0;
+                display: none;
+                min-width: 140px;
+                font-family: 'Pretendard', sans-serif;
+            }
+            #pdf-orient-menu button {
+                display: block;
+                width: 100%;
+                text-align: left;
+                background: transparent;
+                border: none;
+                padding: 10px 18px;
+                font-size: 14px;
+                cursor: pointer;
+                color: #334155;
+                font-family: 'Pretendard', sans-serif;
+            }
+            #pdf-orient-menu button:hover {
+                background: #F0FAFC;
+                color: #2A9BB0;
+            }
 
             @media print {
                 /* 사이드바 숨김 */
@@ -768,8 +924,9 @@ def add_pdf_button():
                 [data-testid="stStatusWidget"] {
                     display: none !important;
                 }
-                /* PDF 버튼 자체 숨김 */
-                #pdf-download-btn {
+                /* PDF 버튼/메뉴 자체 숨김 */
+                #pdf-download-btn,
+                #pdf-orient-menu {
                     display: none !important;
                 }
                 /* iframe(components) 영역 숨김 - 빈 공간 제거 */
@@ -793,23 +950,56 @@ def add_pdf_button():
                 .stApp {
                     background-color: white !important;
                 }
-                /* 페이지 설정 */
-                @page {
-                    size: A4 landscape;
-                    margin: 10mm;
-                }
             }
         `;
         parentDoc.head.appendChild(style);
 
-        // 버튼 생성 및 부모 문서에 삽입
+        // 메인 버튼
         var btn = parentDoc.createElement('button');
         btn.id = 'pdf-download-btn';
-        btn.innerHTML = '<i class="fa fa-print"></i> PDF 저장';
-        btn.onclick = function() {
-            window.parent.print();
-        };
+        btn.innerHTML = '<i class="fa fa-print"></i> PDF 저장 <span style="font-size:10px;margin-left:2px;">▾</span>';
         parentDoc.body.appendChild(btn);
+
+        // 방향 선택 메뉴
+        var menu = parentDoc.createElement('div');
+        menu.id = 'pdf-orient-menu';
+        menu.innerHTML = ''
+            + '<button data-orient="landscape"><i class="fa fa-arrows-h" style="margin-right:8px;color:#48C0D8;"></i>가로 (Landscape)</button>'
+            + '<button data-orient="portrait"><i class="fa fa-arrows-v" style="margin-right:8px;color:#48C0D8;"></i>세로 (Portrait)</button>';
+        parentDoc.body.appendChild(menu);
+
+        // 메뉴 토글
+        btn.onclick = function(e) {
+            e.stopPropagation();
+            menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+        };
+
+        // 메뉴 외부 클릭 시 닫기
+        parentDoc.addEventListener('click', function(e) {
+            if (e.target !== btn && !btn.contains(e.target) && !menu.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
+
+        // 방향 선택 → 동적으로 @page 주입 후 인쇄
+        function doPrint(orientation) {
+            var old = parentDoc.getElementById('pdf-orient-style');
+            if (old) old.remove();
+            var s = parentDoc.createElement('style');
+            s.id = 'pdf-orient-style';
+            s.media = 'print';
+            s.textContent = '@page { size: A4 ' + orientation + '; margin: 10mm; }';
+            parentDoc.head.appendChild(s);
+            menu.style.display = 'none';
+            setTimeout(function() { window.parent.print(); }, 60);
+        }
+
+        menu.querySelectorAll('button').forEach(function(b) {
+            b.addEventListener('click', function(e) {
+                e.stopPropagation();
+                doPrint(b.getAttribute('data-orient'));
+            });
+        });
     })();
     </script>
     """, height=0)
@@ -877,9 +1067,13 @@ def train_model_with_calibration(X, y):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    # XGBoost 모델 정의
-    model = xgb.XGBClassifier(
-        n_estimators=350,
+    # Early stopping용 내부 validation split
+    X_tr, X_val, y_tr, y_val = train_test_split(
+        X_train, y_train, test_size=0.15, random_state=42, stratify=y_train
+    )
+
+    # 공통 XGBoost 하이퍼파라미터
+    xgb_params = dict(
         learning_rate=0.05,
         max_depth=6,
         subsample=0.8,
@@ -890,17 +1084,31 @@ def train_model_with_calibration(X, y):
         n_jobs=-1,
         tree_method="hist",
         enable_categorical=False,
-
-        # 🔥 핵심: 퇴직(1) 클래스에 가중치 적용
-        scale_pos_weight=scale_pos_weight
+        scale_pos_weight=scale_pos_weight,
     )
 
-    # 학습
-    model.fit(X_train, y_train)
+    # 최종 모델: early stopping으로 자동 종료
+    model = xgb.XGBClassifier(
+        n_estimators=800,
+        early_stopping_rounds=30,
+        **xgb_params,
+    )
+    model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
     # 예측
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
+
+    # 5-fold CV ROC AUC (안정적인 신뢰도 평가용)
+    try:
+        cv_model = xgb.XGBClassifier(n_estimators=300, **xgb_params)
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(cv_model, X, y, cv=cv, scoring="roc_auc", n_jobs=-1)
+        cv_roc_mean = float(cv_scores.mean())
+        cv_roc_std = float(cv_scores.std())
+    except Exception:
+        cv_roc_mean = float("nan")
+        cv_roc_std = float("nan")
 
     # 성능 지표 계산
     metrics = {
@@ -909,7 +1117,10 @@ def train_model_with_calibration(X, y):
         "roc_auc": roc_auc_score(y_test, y_proba),
         "pr_auc": average_precision_score(y_test, y_proba),
         "confusion_matrix": confusion_matrix(y_test, y_pred),
-        "cv_mean": {"accuracy": np.nan, "f1": np.nan, "roc_auc": np.nan},
+        "cv_mean": {"accuracy": np.nan, "f1": np.nan, "roc_auc": cv_roc_mean},
+        "cv_std_roc": cv_roc_std,
+        "n_total": int(len(X)),
+        "best_iteration": int(getattr(model, "best_iteration", model.n_estimators) or model.n_estimators),
         "y_test": y_test,
         "y_proba_test": y_proba,
     }
@@ -1014,7 +1225,7 @@ st.sidebar.markdown("""
 # =========================
 if menu == "전체 현황":
     add_pdf_button()
-    st.title("전체 현황 대시보드")
+    st.title("전체 현황")
     # 전체 예측 확률 — 한 번만 계산 후 재사용
     _all_proba = model.predict_proba(df[X.columns])[:, 1]
     st.markdown("""
@@ -1186,12 +1397,24 @@ if menu == "전체 현황":
                 if feat in label_encoders:
                     le = label_encoders[feat]
                     classes = list(le.classes_)
-                    if left_group > stay_group:
-                        high_idx = min(int(round(left_group)), len(classes)-1)
-                        detail = f"'{classes[high_idx]}' 값일 때 퇴직 확률 상승"
-                    else:
-                        low_idx = min(int(round(stay_group)), len(classes)-1)
-                        detail = f"'{classes[low_idx]}' 값일 때 퇴직 확률 하락"
+                    # 라벨 인코딩된 정수의 평균은 카테고리를 가리키지 않으므로
+                    # 그룹별 실제 퇴직률(상태 평균)을 비교해서 최고/최저 범주를 찾는다
+                    try:
+                        grp = df.groupby(feat)['상태'].mean()
+                        if len(grp) > 0:
+                            high_cat_idx = int(grp.idxmax())
+                            low_cat_idx = int(grp.idxmin())
+                            high_cat = classes[high_cat_idx] if 0 <= high_cat_idx < len(classes) else str(high_cat_idx)
+                            low_cat = classes[low_cat_idx] if 0 <= low_cat_idx < len(classes) else str(low_cat_idx)
+                            detail = (
+                                f"'{high_cat}' 그룹의 퇴직률이 가장 높고 "
+                                f"({grp.max()*100:.1f}%), '{low_cat}' 그룹이 가장 낮음 "
+                                f"({grp.min()*100:.1f}%)"
+                            )
+                        else:
+                            detail = "범주별 퇴직률 산정 불가"
+                    except Exception:
+                        detail = "범주별 퇴직률 산정 불가"
                 else:
                     if left_group > stay_group:
                         detail = f"값이 높을수록 퇴직 확률 상승 (퇴직자 평균: {left_group:.1f}, 재직자 평균: {stay_group:.1f})"
@@ -1240,7 +1463,8 @@ if menu == "전체 현황":
                 df_left['퇴직년월'] = df_left['퇴직일'].dt.to_period('M')
                 monthly = df_left.groupby('퇴직년월').size().reset_index()
                 monthly.columns = ['년월', '퇴직자 수']
-                monthly['월라벨'] = monthly['년월'].astype(str)
+                monthly = monthly.sort_values('년월')
+                monthly['월라벨'] = monthly['년월'].dt.strftime('%y.%m')
 
                 max_cnt = int(monthly['퇴직자 수'].max()) if len(monthly)>0 else 0
                 y_max = max_cnt * 1.25 + 0.5 if max_cnt > 0 else 1
@@ -1349,7 +1573,7 @@ if menu == "전체 현황":
                 else:
                     risk_label = "낮은 위험"
 
-                accent_color = "#06B6D4"  # 기존 카드 색 유지
+                accent_color = "#48C0D8"  # 기존 카드 색 유지
 
                 st.markdown(f"""
                 <div style="
@@ -1430,7 +1654,7 @@ if menu == "전체 현황":
                     else:
                         risk_label = "낮은 위험"
 
-                    accent_color = "#06B6D4"
+                    accent_color = "#48C0D8"
 
                     st.markdown(f"""
                     <div style="
@@ -1640,52 +1864,161 @@ if menu == "전체 현황":
     st.markdown("---")
     with st.expander("모델 설명 및 신뢰도", expanded=False):
 
-        # 쉬운 설명
-        _acc = metrics['accuracy'] * 100
+        # ----- 섹션 전용 스타일 -----
+        st.markdown("""
+        <style>
+        .mdl-badge-card {
+            border-radius: 12px;
+            padding: 24px 28px;
+            color: #FFFFFF;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            margin-bottom: 8px;
+        }
+        .mdl-badge-label {
+            font-size: 13px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            opacity: 0.85;
+            margin-bottom: 6px;
+        }
+        .mdl-badge-value {
+            font-size: 32px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 4px;
+        }
+        .mdl-badge-sub {
+            font-size: 14px;
+            opacity: 0.92;
+        }
+        .mdl-metric-card {
+            background: #FFFFFF;
+            border: 1px solid #E5E7EB;
+            border-radius: 10px;
+            padding: 16px 18px;
+            margin-bottom: 10px;
+        }
+        .mdl-metric-name {
+            font-size: 14px;
+            color: #6B7280;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .mdl-metric-val {
+            font-size: 22px;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+        .mdl-metric-bar-bg {
+            height: 8px;
+            background: #F3F4F6;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .mdl-metric-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+        }
+        .mdl-metric-desc {
+            font-size: 12px;
+            color: #6B7280;
+            margin-top: 6px;
+        }
+        .mdl-cm-card {
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .mdl-cm-num {
+            font-size: 36px;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .mdl-cm-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 6px;
+            letter-spacing: 0.02em;
+        }
+        .mdl-cm-desc {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-top: 4px;
+        }
+        .mdl-notice {
+            background: transparent;
+            padding: 16px 4px 4px 4px;
+            color: #475569;
+            font-size: 14px;
+            line-height: 1.7;
+            margin-top: 16px;
+        }
+        .mdl-notice b {
+            color: #334155;
+            font-weight: 700;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        _acc = metrics['accuracy']
         _f1 = metrics['f1']
         _roc = metrics['roc_auc']
-
-        # 신뢰도 등급
-        if _roc >= 0.9:
-            _grade = "매우 높음"
-        elif _roc >= 0.8:
-            _grade = "높음"
-        elif _roc >= 0.7:
-            _grade = "보통"
-        else:
-            _grade = "낮음"
-
+        _pr = metrics['pr_auc']
         cm = metrics['confusion_matrix']
         tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
         _total_test = tn + fp + fn + tp
-        _caught = tp
-        _missed = fn
-        _false_alarm = fp
 
-        st.markdown(f"""
----
-### 이 예측 모델, 쉽게 이해하기
+        # 신뢰도 등급: 단일 split은 변동성이 크므로 5-fold CV 평균을 우선 사용
+        _cv_roc = metrics.get('cv_mean', {}).get('roc_auc', float('nan'))
+        _cv_std = metrics.get('cv_std_roc', float('nan'))
+        _n_total = metrics.get('n_total', 0)
 
-**1. 이 모델은 무엇을 하나요?**
+        if isinstance(_cv_roc, float) and not np.isnan(_cv_roc):
+            _grade_roc = _cv_roc
+            _roc_source = f"5-Fold CV 평균 ROC AUC {_cv_roc:.2f} (±{_cv_std:.2f})"
+        else:
+            _grade_roc = _roc
+            _roc_source = f"ROC AUC {_roc:.2f}"
+
+        _light_cyan = "#7DD3FC"
+        if _grade_roc >= 0.9:
+            _grade, _grade_color, _grade_msg = "매우 높음", COLORS["primary"], "실무 의사결정에 자신 있게 활용 가능합니다."
+        elif _grade_roc >= 0.8:
+            _grade, _grade_color, _grade_msg = "높음", _light_cyan, "보조 지표로 적극 활용할 수 있는 수준입니다."
+        elif _grade_roc >= 0.7:
+            _grade, _grade_color, _grade_msg = "보통", COLORS["secondary"], "참고 자료로 활용하되 정성적 판단을 병행하세요."
+        else:
+            _grade, _grade_color, _grade_msg = "낮음", COLORS["warning"], "데이터 보강 후 재학습이 권장됩니다."
+
+        # ===== 1) 용어와 원리 =====
+        st.markdown("### 용어와 원리")
+        st.markdown("""
+**XGBoost 모델이란?**
+
+이 대시보드의 예측 엔진은 **XGBoost(eXtreme Gradient Boosting)**라는 머신러닝 알고리즘입니다.
+
+- **수많은 작은 의사결정 나무(Decision Tree)를 순차적으로 쌓아 올리는** 방식입니다.
+  앞선 나무가 틀린 부분을 다음 나무가 보완하면서 점점 정답에 가까워집니다.
+- 직원 한 명에 대해 "근무연수 5년 미만인가?", "평가등급이 BB 이하인가?", "서울 근무인가?" 같은
+  **수십~수백 개의 질문을 조합**해서 최종적으로 퇴직 확률을 계산합니다.
+- 변수 간 **복잡한 상호작용**(예: "젊은 + 서울 + 연장근무"가 동시에 있을 때 위험 급증)을
+  자동으로 학습하기 때문에, 단순 통계로는 보이지 않는 패턴까지 잡아냅니다.
+- 결측치(빈 값)에도 강하고, 캐글(Kaggle) 등 데이터 경진대회에서 가장 많이 우승해 온
+  **검증된 모델**이라 HR·금융·마케팅 등 실무에서 폭넓게 쓰입니다.
+
+**이 모델은 무엇을 하나요?**
 
 직원들의 근속연수, 직무, 조직, 급여 등 **여러 정보를 종합**해서,
 "이 직원이 앞으로 퇴직할 가능성이 높은지 낮은지"를 **확률(%)**로 알려줍니다.
 예를 들어 퇴직 위험 72%라면, 과거에 비슷한 조건의 직원 100명 중 약 72명이 퇴직했다는 의미입니다.
 
-**2. 얼마나 정확한가요?**
-
-모델을 학습에 사용하지 않은 별도 데이터(**{_total_test}명**)로 검증한 결과입니다.
-- 전체 정확도: **{_acc:.0f}%** (100명 중 약 {_acc:.0f}명을 맞춤)
-- 실제 퇴직자 {tp + fn}명 중 **{_caught}명을 사전에 포착**했고, {_missed}명은 놓쳤습니다.
-- 재직자 중 **{_false_alarm}명은 퇴직으로 잘못 예측**했습니다 (과잉 경보).
-- 모델 신뢰도 등급: **{_grade}**
-
-**3. 영향도(%)는 무엇인가요?**
+**영향도(%)는 무엇인가요?**
 
 모델이 퇴직 여부를 판단할 때 **어떤 정보를 얼마나 중요하게 봤는지**를 비율로 나타낸 것입니다.
 예: 핵심인재 여부 38%, 근속연수 15% → 모델이 퇴직을 예측할 때 핵심인재 여부를 가장 많이 참고했다는 뜻입니다.
 
-**4. 상관계수 / 관련도는 무엇인가요?**
+**상관계수 / 관련도는 무엇인가요?**
 
 - **상관계수**(-1 ~ +1): 숫자형 변수와 퇴직의 관계입니다.
   - +0.5 이상이면 "그 값이 높을수록 퇴직이 많다"
@@ -1694,80 +2027,99 @@ if menu == "전체 현황":
 - **관련도**(0 ~ 1): 범주형 변수(직무, 조직 등)와 퇴직의 관계입니다.
   - 1에 가까울수록 "어떤 그룹이냐에 따라 퇴직 비율 차이가 크다"는 뜻입니다.
 
-**5. 주의할 점**
+**모델 작동 원리**
+
+- 이 대시보드는 **XGBoost 기반 이진 분류 모델**로, 각 직원의 특성을 입력받아 **퇴직(1) / 재직(0) 확률**을 예측합니다.
+- 직무, 조직, 연장근무, 보상수준 등 여러 변수가 서로 섞여 작용하는 패턴을 함께 학습합니다.
+- 경기, 조직개편, 경영전략 변화처럼 데이터에 없는 외부 요인은 반영하지 못하므로, **HR/리더의 정성적 판단과 함께 쓰는 보조 도구**로 보는 것이 적절합니다.
+
+**주의할 점**
 
 - 이 모델은 **과거 데이터의 패턴**을 학습한 것이므로, 미래를 100% 맞추지는 못합니다.
 - 경기 변동, 조직개편, 개인 사정 등 **데이터에 없는 요인은 반영되지 않습니다.**
 - "퇴직 위험이 높다" = "반드시 퇴직한다"가 아니라, **"관심을 가지고 살펴볼 필요가 있다"**는 신호입니다.
 - HR담당자와 리더의 **정성적 판단과 함께 보조 도구로 활용**하는 것을 권장합니다.
-
----
         """)
 
-        st.divider()
+        st.markdown("---")
 
-        # 혼동행렬 (1개로 통합)
-        st.subheader("예측 정확도 상세")
-        colA, colB = st.columns([1, 1])
+        # ===== 2) 신뢰도 =====
+        st.markdown("### 신뢰도")
+        st.markdown(f"""
+        <div class="mdl-badge-card" style="background: linear-gradient(135deg, {_grade_color} 0%, {_grade_color}CC 100%);">
+            <div class="mdl-badge-label">모델 신뢰도 등급</div>
+            <div class="mdl-badge-value">{_grade}</div>
+            <div class="mdl-badge-sub">{_roc_source} · {_grade_msg}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        with colA:
-            cm = metrics['confusion_matrix']
-            fig_cm = px.imshow(
-                cm,
-                labels=dict(x="예측", y="실제", color="건수"),
-                x=['재직(0)','퇴직(1)'],
-                y=['재직(0)','퇴직(1)'],
-                text_auto=True,
-                color_continuous_scale=[(0, '#A5E6F3'), (1, COLORS['primary'])],
-                title="혼동행렬 (테스트셋)"
-            )
-            st.plotly_chart(set_font(fig_cm), use_container_width=True)
-
-        with colB:
-            # 혼동행렬 쉬운 해석
-            cm = metrics['confusion_matrix']
-            tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+        if _n_total > 0 and _n_total < 1000:
             st.markdown(f"""
-            <div style="background-color: #F8FAFC; padding: 16px; border-radius: 8px; border: 1px solid #E2E8F0;">
-                <p style="font-size: 14px; color: #334155; line-height: 2.0; margin: 0;">
-                    <b>재직자를 재직으로 맞춘 경우:</b> {tn}명<br>
-                    <b>퇴직자를 퇴직으로 맞춘 경우:</b> {tp}명<br>
-                    <b>재직자인데 퇴직으로 잘못 예측 (과잉 경보):</b> {fp}명<br>
-                    <b>퇴직자인데 재직으로 잘못 예측 (놓친 퇴직자):</b> {fn}명
-                </p>
+            <div class="mdl-notice">
+                현재 학습 표본은 <b>{_n_total}명</b>입니다. 표본이 1,000명 미만이면 신뢰도 평가 자체가 변동성이 큽니다.
+                동일 데이터로 재학습 시 등급이 한 단계 오르내릴 수 있으므로, 가능하면 표본을 확대해 학습하시기를 권장합니다.
             </div>
             """, unsafe_allow_html=True)
 
-        st.divider()
+        st.markdown("##### 핵심 지표")
 
-        # 성능 지표 상세
-        st.subheader("성능 지표 상세")
-        st.markdown("""
-**모델 성능 요약 (테스트 데이터 기준)**
+        _gauges = [
+            ("정확도 (Accuracy)", _acc, "전체 예측 중 맞춘 비율"),
+            ("F1 Score", _f1, "놓치지 않으면서 과잉경보를 줄인 균형 지표"),
+            ("ROC AUC", _roc, "재직자와 퇴직자를 얼마나 잘 구분하는지"),
+            ("PR AUC", _pr, "퇴직자 비중이 적을 때의 정밀 예측력"),
+        ]
 
-- 정확도(Accuracy): 전체 예측 중 맞춘 비율 → **{:.1f}%**
-- F1 Score: 퇴직자를 놓치지 않으면서도, 과잉 경보를 얼마나 줄였는지 보는 균형 지표 → **{:.2f}**
-- ROC AUC: 재직자와 퇴직자를 얼마나 잘 구분하는지(1에 가까울수록 좋음) → **{:.2f}**
-- PR-AUC: 실제 퇴직자가 적은 상황에서,
-  '위험이라고 찍은 사람들 중 진짜 퇴직자 비율'을 얼마나 잘 유지하는지 보는 지표 → **{:.2f}**
-        """.format(
-            metrics['accuracy']*100,
-            metrics['f1'],
-            metrics['roc_auc'],
-            metrics['pr_auc']
-        ))
+        _c1, _c2 = st.columns(2)
+        for _i, (_name, _val, _desc) in enumerate(_gauges):
+            with (_c1 if _i % 2 == 0 else _c2):
+                _pct = max(0, min(1, _val)) * 100
+                st.markdown(f"""
+                <div class="mdl-metric-card">
+                    <div class="mdl-metric-name">{_name}</div>
+                    <div class="mdl-metric-val">{_val:.2f}<span style="font-size:14px;color:#9CA3AF;font-weight:500;">  /  1.00</span></div>
+                    <div class="mdl-metric-bar-bg">
+                        <div class="mdl-metric-bar-fill" style="width:{_pct}%; background:{COLORS['primary']};"></div>
+                    </div>
+                    <div class="mdl-metric-desc">{_desc}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
-        st.divider()
+        st.markdown("---")
 
-        # 모델 설명
-        st.subheader("모델 작동 원리")
-        st.markdown("""
-- 이 대시보드는 **XGBoost 기반 이진 분류 모델**로,
-  각 직원의 특성을 입력받아 **퇴직(1) / 재직(0) 확률**을 예측합니다.
-- 직무, 조직, 연장근무, 보상수준 등 여러 변수가 서로 섞여 작용하는 패턴을 함께 학습합니다.
-- 경기, 조직개편, 경영전략 변화처럼 데이터에 없는 외부 요인은 반영하지 못하므로,
-  **HR/리더의 정성적 판단과 함께 쓰는 보조 도구**로 보는 것이 적절합니다.
-        """)
+        # ===== 3) 세부사항 =====
+        st.markdown("### 세부사항")
+        st.markdown("##### 혼동행렬 (테스트 표본 기준)")
+        st.caption(f"테스트 데이터 총 {_total_test}명을 대상으로 모델의 예측이 실제 결과와 얼마나 일치했는지 보여줍니다.")
+
+        _cards = [
+            (tp, "사전 포착", "실제 퇴직자를 퇴직으로 정확히 예측", COLORS["primary"]),
+            (tn, "정상 재직", "실제 재직자를 재직으로 정확히 예측", _light_cyan),
+            (fn, "놓친 퇴직자", "실제 퇴직자를 재직으로 잘못 예측", COLORS["warning"]),
+            (fp, "과잉 경보", "실제 재직자를 퇴직으로 잘못 예측", COLORS["secondary"]),
+        ]
+
+        _cc = st.columns(4)
+        for _col, (_num, _lbl, _d, _bg) in zip(_cc, _cards):
+            _txt = "#334155" if _bg == _light_cyan else "#FFFFFF"
+            with _col:
+                st.markdown(f"""
+                <div class="mdl-cm-card" style="background:{_bg}; color:{_txt};">
+                    <div class="mdl-cm-num">{_num}</div>
+                    <div class="mdl-cm-label">{_lbl}</div>
+                    <div class="mdl-cm-desc">{_d}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        _total_quit = tp + fn
+        _catch_rate = (tp / _total_quit * 100) if _total_quit > 0 else 0
+        _precision = (tp / (tp + fp) * 100) if (tp + fp) > 0 else 0
+        st.markdown(f"""
+        <div class="mdl-notice">
+            테스트 표본의 실제 퇴직자 <b>{_total_quit}명</b> 중 <b>{tp}명({_catch_rate:.0f}%)</b>을 사전에 포착했고,
+            고위험 예측 <b>{tp + fp}명</b> 중 <b>{tp}명({_precision:.0f}%)</b>이 실제 퇴직자였습니다.
+        </div>
+        """, unsafe_allow_html=True)
 
 # =========================
 # 2) 핵심인재 현황
@@ -1870,7 +2222,7 @@ if menu == "핵심인재 현황":
                 st.subheader("퇴직위험 등급 분포")
                 risk_labels = ['고위험 (≥70%)', '중위험 (30~70%)', '저위험 (<30%)']
                 risk_values = [high_cnt, mid_cnt, low_cnt]
-                risk_colors = ['#F4A7A7', '#FDE68A', '#48C0D8']
+                risk_colors = ['#F59E0B', '#7DD3FC', '#48C0D8']
                 fig_risk = go.Figure(data=[go.Pie(
                     labels=risk_labels, values=risk_values, hole=0.55,
                     marker_colors=risk_colors,
@@ -1904,8 +2256,8 @@ if menu == "핵심인재 현황":
                         else:
                             org_labels.append(str(idx))
                     def _risk_color(v):
-                        if v >= 0.70: return '#F4A7A7'
-                        elif v >= 0.30: return '#FDE68A'
+                        if v >= 0.70: return '#F59E0B'
+                        elif v >= 0.30: return '#7DD3FC'
                         else: return '#48C0D8'
                     fig_org = go.Figure(go.Bar(
                         x=org_risk.values * 100, y=org_labels,
@@ -1941,9 +2293,9 @@ if menu == "핵심인재 현황":
             # 위험 등급 컬럼 추가
             def _risk_badge(prob):
                 if prob >= 0.70:
-                    return '<span style="color:#F4A7A7;">●</span> 고위험'
+                    return '<span style="color:#F59E0B;">●</span> 고위험'
                 elif prob >= 0.30:
-                    return '<span style="color:#FDE68A;">●</span> 중위험'
+                    return '<span style="color:#7DD3FC;">●</span> 중위험'
                 else:
                     return '<span style="color:#48C0D8;">●</span> 저위험'
             top10_disp['위험등급'] = _top10['퇴직예측확률'].apply(_risk_badge)
@@ -2103,7 +2455,8 @@ if menu == "핵심인재 현황":
                     core_left_df['퇴직년월'] = core_left_df['퇴직일'].dt.to_period('M')
                     c_monthly = core_left_df.groupby('퇴직년월').size().reset_index()
                     c_monthly.columns = ['년월', '퇴직자 수']
-                    c_monthly['월라벨'] = c_monthly['년월'].astype(str)
+                    c_monthly = c_monthly.sort_values('년월')
+                    c_monthly['월라벨'] = c_monthly['년월'].dt.strftime('%y.%m')
 
                     c_max = int(c_monthly['퇴직자 수'].max()) if len(c_monthly) > 0 else 0
                     c_ymax = c_max * 1.25 + 0.5 if c_max > 0 else 1
@@ -2238,14 +2591,14 @@ if menu == "핵심인재 현황":
 # =========================
 if menu == "개인별 현황":
     add_pdf_button()
-    st.title("직원 개별 퇴직 예측")
+    st.title("개인별 퇴직 예측")
     # 전체 예측 확률 — 한 번만 계산 후 재사용
     _all_proba_ind = model.predict_proba(df[X.columns])[:, 1]
 
     # -------------------------
     # 직원 검색 (성명 / 사원번호)
     # -------------------------
-    search_mode = st.radio("검색 방식 선택", ["성명", "사원번호"], horizontal=True)
+    search_mode = st.radio("검색 방식 선택", ["사원번호", "성명"], horizontal=True)
     emp_row = None
 
     if search_mode == "사원번호":
@@ -2305,14 +2658,14 @@ if menu == "개인별 현황":
                 number={'suffix': '%', 'font': {'size': 36}},
                 gauge={
                     'axis': {'range': [0, 100], 'tickwidth': 1},
-                    'bar': {'color': '#F4A7A7' if pred_prob >= 0.7 else '#FDE68A' if pred_prob >= 0.3 else '#48C0D8'},
+                    'bar': {'color': '#F59E0B' if pred_prob >= 0.7 else '#7DD3FC' if pred_prob >= 0.3 else '#48C0D8'},
                     'steps': [
-                        {'range': [0, 30], 'color': '#E8F8FB'},
-                        {'range': [30, 70], 'color': '#FFFDF0'},
-                        {'range': [70, 100], 'color': '#FDF3F3'}
+                        {'range': [0, 30], 'color': '#F0FBFC'},
+                        {'range': [30, 70], 'color': '#FEF7E0'},
+                        {'range': [70, 100], 'color': '#FCE7C8'}
                     ],
                     'threshold': {
-                        'line': {'color': '#1F2937', 'width': 3},
+                        'line': {'color': '#334155', 'width': 3},
                         'thickness': 0.75,
                         'value': pred_prob * 100
                     }
@@ -2329,7 +2682,7 @@ if menu == "개인별 현황":
                 marker_color=COLORS['primary'], opacity=0.7,
                 name='전체 직원 분포'
             ))
-            _vline_color = '#F4A7A7' if pred_prob >= 0.7 else '#FDE68A' if pred_prob >= 0.3 else '#48C0D8'
+            _vline_color = '#F59E0B' if pred_prob >= 0.7 else '#7DD3FC' if pred_prob >= 0.3 else '#48C0D8'
             fig_hist.add_vline(
                 x=pred_prob * 100,
                 line_dash="dash", line_color=_vline_color, line_width=3,
@@ -2346,11 +2699,11 @@ if menu == "개인별 현황":
 
         # 위험등급 배지
         if pred_prob >= 0.70:
-            badge_color, badge_text = '#F4A7A7', '🟠 고위험'
+            badge_color, badge_text = '#F59E0B', '고위험'
         elif pred_prob >= 0.30:
-            badge_color, badge_text = '#FDE68A', '🟡 중위험'
+            badge_color, badge_text = '#7DD3FC', '중위험'
         else:
-            badge_color, badge_text = '#48C0D8', '🔵 저위험'
+            badge_color, badge_text = '#48C0D8', '저위험'
 
         st.markdown(f"""
         <div style="background-color: {badge_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
@@ -2379,7 +2732,7 @@ if menu == "개인별 현황":
                 if _emp_v in _grp.index:
                     _gr = _grp[_emp_v] * 100
                     _ov = df['상태'].mean() * 100
-                    _imp = '<span style="background:#F4A7A7;color:#7a2a2a;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _gr > _ov * 1.1 else ('<span style="background:#D1FAE5;color:#065f46;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 감소</span>' if _gr < _ov * 0.9 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>')
+                    _imp = '<span style="background:#FEF3C7;color:#7a4e00;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _gr > _ov * 1.1 else ('<span style="background:#E0F7FA;color:#0284C7;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 감소</span>' if _gr < _ov * 0.9 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>')
                     _reason_rows.append({'변수': _rf, '개인 값': str(_vl), '해당그룹 퇴직률': f"{_gr:.1f}%", '전체 평균 퇴직률': f"{_ov:.1f}%", '영향': _imp})
             else:
                 _avg = float(df[_rf].mean())
@@ -2391,7 +2744,7 @@ if menu == "개인별 현황":
                     _u = "만원" if any(k in _rf for k in _sal) else ("년" if any(k in _rf for k in _yr) else ("세" if any(k in _rf for k in _age) else ""))
                     _vs = f"{_emp_v:,.0f}{_u}" if _u else f"{_emp_v:,.1f}"
                     _as = f"{_avg:,.0f}{_u}" if _u else f"{_avg:,.1f}"
-                    _imp = '<span style="background:#F4A7A7;color:#7a2a2a;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _ratio < 0.7 or _ratio > 1.3 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>'
+                    _imp = '<span style="background:#FEF3C7;color:#7a4e00;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">위험 증가</span>' if _ratio < 0.7 or _ratio > 1.3 else '<span style="background:#E2E8F0;color:#475569;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">평균 수준</span>'
                     _reason_rows.append({'변수': _rf, '개인 값': _vs, '전체 평균': _as, '평균 대비': f"{_ratio*100:.0f}%", '영향': _imp})
         if _reason_rows:
             show_table_centered(pd.DataFrame(_reason_rows))
@@ -2501,7 +2854,7 @@ if menu == "개인별 현황":
                             xaxis_title='', yaxis_title='퇴직위험(%)', height=300
                         )
                         st.plotly_chart(set_font(fig_rank), use_container_width=True)
-                        st.caption(f"🔴 빨간색 바가 해당 직원입니다. {col} '{display_val}' 내 {n_grp}명 중 {my_rank}위 (상위 {my_rank/n_grp*100:.1f}%)")
+                        st.caption(f"강조된 바가 해당 직원입니다. {col} '{display_val}' 내 {n_grp}명 중 {my_rank}위 (상위 {my_rank/n_grp*100:.1f}%)")
                         _rank_has_chart = True
                 except Exception:
                     pass
@@ -2515,27 +2868,26 @@ if menu == "개인별 현황":
         if len(top_features) > 0:
             st.subheader("상위 변수별 프로필 비교")
 
-            _r_vals, _r_avgs, _r_labels = [], [], []
             _num_rows = []   # 수치형 변수 상세 테이블용
             _cat_rows = []   # 범주형 변수 상세 테이블용
+            _bar_rows = []   # 위험 기여 막대 (수치·범주형 통합)
 
             for var in top_features:
                 if var in label_encoders:
                     # 범주형 변수 처리
                     raw_val = emp_row[var].iloc[0]
                     _el = get_label(raw_val, var, label_encoders)
-                    # 해당 범주의 퇴직률 계산
                     same_cat = df[df[var] == raw_val]
                     if len(same_cat) > 0 and '상태' in df.columns:
                         cat_turnover = same_cat['상태'].mean() * 100
                         overall_turnover = df['상태'].mean() * 100
                         diff_turnover = cat_turnover - overall_turnover
                         if diff_turnover > 0:
-                            risk_tag = f"🟠 전체 대비 +{diff_turnover:.1f}%p 높음"
+                            risk_tag = f"전체 대비 +{diff_turnover:.1f}%p 높음"
                         elif diff_turnover < -1:
-                            risk_tag = f"🔵 전체 대비 {diff_turnover:.1f}%p 낮음"
+                            risk_tag = f"전체 대비 {diff_turnover:.1f}%p 낮음"
                         else:
-                            risk_tag = "🩶 전체 평균과 유사"
+                            risk_tag = "전체 평균과 유사"
                         _cat_rows.append({
                             '변수': var,
                             '해당 직원': str(_el),
@@ -2543,6 +2895,15 @@ if menu == "개인별 현황":
                             '전체 퇴직률': f"{overall_turnover:.1f}%",
                             '위험 수준': risk_tag
                         })
+
+                        # 위험 기여도 (범주형): 해당 범주 퇴직률 - 전체 퇴직률 (%p)
+                        try:
+                            _bar_rows.append({
+                                'label': f"{var} ({_el})",
+                                'pp': float(diff_turnover),  # percentage points
+                            })
+                        except Exception:
+                            pass
                     else:
                         _cat_rows.append({
                             '변수': var,
@@ -2560,9 +2921,6 @@ if menu == "개인별 현황":
 
                     if _av != 0:
                         ratio = _ev / _av * 100
-                        _r_vals.append(ratio)
-                        _r_avgs.append(100)
-                        _r_labels.append(var)
                         diff_pct = ratio - 100
                         if diff_pct > 10:
                             direction = f"▲ 평균 대비 +{diff_pct:.0f}%"
@@ -2581,95 +2939,149 @@ if menu == "개인별 현황":
                         '분위수': f"하위 {_pct}%"
                     })
 
-            # --- 레이더 차트 ---
-            if _r_labels:
-                fig_radar = go.Figure()
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=_r_vals + [_r_vals[0]], theta=_r_labels + [_r_labels[0]],
-                    fill='toself', name='해당 직원',
-                    fillcolor='rgba(85, 72, 199, 0.2)',
-                    line=dict(color=COLORS['secondary'], width=2)
+                    # 위험 기여도 (수치형): 직원의 값을 5분위 binning → 그 구간의 평균 퇴직률 - 전체
+                    try:
+                        if '상태' in df.columns and df[var].nunique() > 1:
+                            # 5-quantile bin (qcut), duplicates='drop'로 중복 경계 처리
+                            bins = pd.qcut(df[var], q=5, duplicates='drop')
+                            df_b = pd.DataFrame({'b': bins, 's': df['상태'].values})
+                            bin_rate = df_b.groupby('b', observed=False)['s'].mean()
+                            # 직원의 값이 속하는 bin 찾기
+                            emp_bin = pd.cut(
+                                [_ev],
+                                bins=bins.cat.categories,
+                                include_lowest=True
+                            )[0]
+                            if pd.isna(emp_bin):
+                                # 범위 밖이면 가장 가까운 구간 사용
+                                emp_rate = bin_rate.iloc[-1] if _ev > df[var].max() else bin_rate.iloc[0]
+                            else:
+                                emp_rate = bin_rate.get(emp_bin, df['상태'].mean())
+                            diff_pp = (float(emp_rate) - float(df['상태'].mean())) * 100
+                            _bar_rows.append({
+                                'label': f"{var} ({_ev:.1f})",
+                                'pp': diff_pp,
+                            })
+                    except Exception:
+                        pass
+
+            # --- 위험 기여도 가로 막대 (퍼센트 포인트 단위) ---
+            if _bar_rows:
+                _bar_df = pd.DataFrame(_bar_rows).sort_values('pp')
+                _bar_colors = [COLORS['warning'] if p > 0 else COLORS['primary'] for p in _bar_df['pp']]
+                _overall = float(df['상태'].mean() * 100) if '상태' in df.columns else 0.0
+                fig_bar = go.Figure(go.Bar(
+                    x=_bar_df['pp'],
+                    y=_bar_df['label'],
+                    orientation='h',
+                    marker_color=_bar_colors,
+                    text=[f"{p:+.1f}%p" for p in _bar_df['pp']],
+                    textposition='outside',
+                    cliponaxis=False,
                 ))
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=_r_avgs + [_r_avgs[0]], theta=_r_labels + [_r_labels[0]],
-                    fill='toself', name='전체 평균 (100%)',
-                    fillcolor='rgba(72, 192, 216, 0.15)',
-                    line=dict(color=COLORS['primary'], width=2, dash='dot')
-                ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True, range=[0, max(max(_r_vals), 150) * 1.1])),
-                    showlegend=True, height=400,
-                    title='상위 변수별 프로필 (전체 평균=100% 기준)'
+                fig_bar.add_vline(x=0, line_dash="dot", line_color="#9CA3AF")
+                _amax = float(_bar_df['pp'].abs().max()) if len(_bar_df) > 0 else 5.0
+                _xpad = max(_amax * 1.35, 5.0)
+                fig_bar.update_layout(
+                    title=f"상위 변수별 위험 기여도 (전체 평균 퇴직률 {_overall:.1f}% 기준)",
+                    xaxis_title="← 평균보다 안전한 그룹        |        평균보다 위험한 그룹 →  (%p)",
+                    yaxis_title="",
+                    height=360,
+                    showlegend=False,
                 )
-                st.plotly_chart(set_font(fig_radar), use_container_width=True)
-                st.caption("전체 평균을 100%로 놓았을 때 해당 직원의 상대적 수준입니다. 안쪽이면 평균 이하, 바깥이면 평균 이상.")
+                fig_bar.update_xaxes(range=[-_xpad, _xpad], zeroline=False)
+                st.plotly_chart(set_font(fig_bar), use_container_width=True)
+                st.markdown(f"""
+<div style="background:#F8FAFC; border:1px solid #E5E7EB; border-radius:8px; padding:14px 18px; font-size:13.5px; color:#475569; line-height:1.75;">
+<b style="color:#334155;">막대 읽는 법</b><br>
+이 차트는 모델이 가장 중요하게 본 상위 6개 변수에 대해,
+<b>이 직원이 속한 그룹의 평균 퇴직률이 전체 평균({_overall:.1f}%)보다 얼마나 높은지/낮은지</b>를 퍼센트 포인트(%p)로 보여줍니다.<br><br>
+<b style="color:#7a4e00;">예: "평가등급 (CC) +18%p"</b> = CC 등급 직원들의 평균 퇴직률이 전체보다 18%p 더 높다는 뜻.
+즉 이 직원의 CC 등급은 퇴직 가능성을 끌어올리는 요인입니다.<br>
+<b style="color:#2A9BB0;">예: "근무연수 (14.2) −12%p"</b> = 비슷한 근속자의 평균 퇴직률이 전체보다 12%p 낮다는 뜻. 안정 요인입니다.<br><br>
+<b>오른쪽(주황)</b>으로 길수록 그 변수에서 직원의 위치가 <b>퇴직 위험을 끌어올리는 그룹</b>,
+<b>왼쪽(청록)</b>으로 길수록 <b>안전한 그룹</b>에 속한다는 의미입니다.
+</div>
+                """, unsafe_allow_html=True)
 
-            # --- 수치형 변수 상세 비교 테이블 ---
-            if _num_rows:
-                st.markdown("##### 수치형 변수 상세 비교")
-                show_table_centered(pd.DataFrame(_num_rows))
+            # --- 주요 위험 / 안정 요인 요약 카드 ---
+            if _bar_rows:
+                _risk = sorted([r for r in _bar_rows if r['pp'] > 1.0], key=lambda r: -r['pp'])[:3]
+                _safe = sorted([r for r in _bar_rows if r['pp'] < -1.0], key=lambda r: r['pp'])[:3]
 
-                # 인사이트 코멘트 자동 생성
-                _insights = []
-                for row in _num_rows:
-                    var_name = row['변수']
-                    comp = row['비교']
-                    if '▲' in comp:
-                        _insights.append(f"- **{var_name}**: 전체 평균보다 **높은 수준**입니다. ({row['개인값']} vs 평균 {row['전체 평균']}, {row['분위수']})")
-                    elif '▼' in comp:
-                        _insights.append(f"- **{var_name}**: 전체 평균보다 **낮은 수준**입니다. ({row['개인값']} vs 평균 {row['전체 평균']}, {row['분위수']})")
-                    else:
-                        _insights.append(f"- **{var_name}**: 전체 평균과 **유사한 수준**입니다. ({row['개인값']} vs 평균 {row['전체 평균']}, {row['분위수']})")
-                if _insights:
-                    with st.expander("수치형 변수 해석 보기", expanded=True):
-                        st.markdown("\n".join(_insights))
+                def _fmt_items(items, color):
+                    if not items:
+                        return f"<div style='color:#9CA3AF;font-size:13px;padding:6px 0;'>해당하는 요인이 없습니다.</div>"
+                    return "".join(
+                        f"<div style='display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #F1F5F9;'>"
+                        f"<span style='color:#334155;font-weight:500;'>{r['label']}</span>"
+                        f"<span style='color:{color};font-weight:700;'>{r['pp']:+.1f}%p</span>"
+                        f"</div>"
+                        for r in items
+                    )
 
-            # --- 범주형 변수 상세 비교 테이블 ---
-            if _cat_rows:
-                st.markdown("##### 범주형 변수 상세 비교")
-                show_table_centered(pd.DataFrame(_cat_rows))
+                _sc1, _sc2 = st.columns(2)
+                with _sc1:
+                    st.markdown(f"""
+                    <div style='background:#FFFFFF;border:1px solid #E5E7EB;border-left:4px solid {COLORS['warning']};border-radius:8px;padding:16px 20px;'>
+                        <div style='font-size:13px;color:#6B7280;letter-spacing:0.04em;margin-bottom:8px;'>주요 위험 요인 (퇴직 확률 ↑)</div>
+                        {_fmt_items(_risk, COLORS['warning'])}
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _sc2:
+                    st.markdown(f"""
+                    <div style='background:#FFFFFF;border:1px solid #E5E7EB;border-left:4px solid {COLORS['primary']};border-radius:8px;padding:16px 20px;'>
+                        <div style='font-size:13px;color:#6B7280;letter-spacing:0.04em;margin-bottom:8px;'>주요 안정 요인 (퇴직 확률 ↓)</div>
+                        {_fmt_items(_safe, COLORS['primary'])}
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                # 범주형 인사이트
-                _cat_insights = []
-                for row in _cat_rows:
-                    var_name = row['변수']
-                    val = row['해당 직원']
-                    risk = row['위험 수준']
-                    if '🟠' in risk:
-                        _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹은 퇴직률이 전체 평균보다 **높아** 주의가 필요합니다.")
-                    elif '🔵' in risk:
-                        _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹은 퇴직률이 전체 평균보다 **낮은** 편입니다.")
-                    else:
-                        _cat_insights.append(f"- **{var_name}** = '{val}' → 이 그룹의 퇴직률은 전체 평균과 **유사**합니다.")
-                if _cat_insights:
-                    with st.expander("범주형 변수 해석 보기", expanded=True):
-                        st.markdown("\n".join(_cat_insights))
+            # --- 상세 비교 테이블 (참고용 원본 수치) ---
+            with st.expander("상세 비교 테이블 보기", expanded=False):
+                if _num_rows:
+                    st.markdown("**수치형 변수**")
+                    show_table_centered(pd.DataFrame(_num_rows))
+                if _cat_rows:
+                    st.markdown("**범주형 변수**")
+                    show_table_centered(pd.DataFrame(_cat_rows))
 
         # =========================
         # 4) 주요 숫자 변수에서의 위치(분위수)
         # =========================
         st.subheader("주요 숫자 변수별 비교")
 
-        num_candidates = ['근무연수', '나이', '기본급', '입사전이직횟수', '보유역량']
+        num_candidates = ['근무연수', '승진후경과연수', '나이', '기본급', '입사전이직횟수', '보유역량']
         rows_num = []
+
+        # 변수별 적정 소수 자릿수 (불필요한 소수점 표시 방지)
+        _int_vars = {'나이', '기본급', '입사전이직횟수', '보유역량'}
 
         for col in num_candidates:
             if col in df.columns:
                 try:
-                    series = pd.to_numeric(df[col], errors='coerce')
+                    series = pd.to_numeric(df[col], errors='coerce').dropna()
                     emp_val = float(pd.to_numeric(emp_row[col], errors='coerce').iloc[0])
 
-                    # 전체 평균/개인값: 정수
-                    mean_val = int(round(series.mean()))
-                    emp_val_int = int(round(emp_val))
+                    if col in _int_vars:
+                        mean_str = f"{series.mean():.0f}"
+                        emp_str = f"{emp_val:.0f}"
+                    else:
+                        mean_str = f"{series.mean():.1f}"
+                        emp_str = f"{emp_val:.1f}"
 
-                    # 분위수(%): 정수 + % 기호
-                    pct = int(round((series <= emp_val).mean() * 100))
+                    # 분위수: 동률 보정 (less + equal/2 — Hyndman-Fan 정의)
+                    n = len(series)
+                    if n > 0:
+                        less = float((series < emp_val).sum())
+                        eq = float((series == emp_val).sum())
+                        pct = int(round(((less + eq / 2.0) / n) * 100))
+                    else:
+                        pct = 0
 
                     rows_num.append({
                         '변수': col,
-                        '개인값': emp_val_int,
-                        '전체 평균': mean_val,
+                        '개인값': emp_str,
+                        '전체 평균': mean_str,
                         '분위수(%)': f"{pct}%"
                     })
                 except Exception:
