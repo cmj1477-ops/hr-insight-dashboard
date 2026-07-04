@@ -8,7 +8,7 @@ import streamlit as st
 import shap
 
 from hr_styles import COLORS, set_font, add_pdf_button, RISK_HIGH, RISK_MID, risk_color
-from hr_components import show_table_centered, get_label
+from hr_components import show_table_centered, get_label, esc
 
 
 def _search_employee(df, label_encoders):
@@ -311,8 +311,8 @@ def render_report(ctx, emp_row):
     st.markdown(f"""
     <div style="background-color: {badge_color}; padding: 12px 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
         <span style="color: #334155; font-size: 16px; font-weight: 600;">
-            사원번호 {emp_row.get('사원번호', pd.Series(['-'])).iloc[0]} /
-            {emp_row.get('이름', pd.Series(['-'])).iloc[0]} — {badge_text} (퇴직 확률: {pred_prob*100:.1f}%)
+            사원번호 {esc(emp_row.get('사원번호', pd.Series(['-'])).iloc[0])} /
+            {esc(emp_row.get('이름', pd.Series(['-'])).iloc[0])} — {badge_text} (퇴직 확률: {pred_prob*100:.1f}%)
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -748,7 +748,7 @@ def render_report(ctx, emp_row):
                     _gr = _grp[_ev]
                     _ov = df['상태'].mean()
                     if _gr > _ov * 1.3:
-                        _vl = get_label(_ev, _tf, label_encoders)
+                        _vl = esc(get_label(_ev, _tf, label_encoders))
                         tips.append(f"**{_tf}** '{_vl}' 그룹의 퇴직률({_gr*100:.1f}%)이 전체 평균({_ov*100:.1f}%)보다 높습니다. 해당 그룹 대상 **맞춤 리텐션 프로그램** 검토가 필요합니다.")
             else:
                 _ev = float(emp_row[_tf].iloc[0])
