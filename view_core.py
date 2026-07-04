@@ -77,8 +77,8 @@ def render(ctx):
         # 🔹 4) 요약 문구
         # -----------------------------
         st.markdown(f"""
-> 🔹 핵심인재 총 **{total_core}명** 중 실제 퇴직자는 **{core_left}명({core_rate:.1f}%)**입니다.
-> 🔹 현재 재직 중인 핵심인재 중 **{high_risk_count}명({high_risk_rate:.1f}%)**이 AI 기준 상위 10% 고위험군입니다.
+> 🔹 핵심인재 총 **{total_core}명** 중 실제 퇴직자는 **{core_left}명({core_rate:.1f}%)**입니다.{"  "}
+> 🔹 현재 재직 중인 핵심인재 중 **{high_risk_count}명({high_risk_rate:.1f}%)**이 AI 기준 상위 10% 고위험군입니다.{"  "}
 > 🔹 핵심인재 퇴직의 주요 사유는 **{reason_text}** 입니다.
         """)
 
@@ -153,6 +153,70 @@ def render(ctx):
                 st.plotly_chart(set_font(fig_org), use_container_width=True)
             else:
                 st.info("'소속조직' 컬럼이 없어 조직별 위험도를 표시할 수 없습니다.")
+
+    # -----------------------------
+    # 핵심인재 퇴직 추이 + 퇴직사유 차트
+    # -----------------------------
+    st.markdown("---")
+    trend_col1, trend_col2 = st.columns([1.3, 1])
+
+    with trend_col1:
+        st.subheader("핵심인재 월별 퇴직 추이")
+        if '퇴직일' in core_all.columns:
+            core_left_df = core_all[(core_all['상태'] == 1) & (core_all['퇴직일'].notna())].copy()
+            if len(core_left_df) > 0:
+                core_left_df['퇴직년월'] = core_left_df['퇴직일'].dt.to_period('M')
+                c_monthly = core_left_df.groupby('퇴직년월').size().reset_index()
+                c_monthly.columns = ['년월', '퇴직자 수']
+                c_monthly = c_monthly.sort_values('년월')
+                c_monthly['월라벨'] = c_monthly['년월'].dt.strftime('%y.%m')
+
+                c_max = int(c_monthly['퇴직자 수'].max()) if len(c_monthly) > 0 else 0
+                c_ymax = c_max * 1.25 + 0.5 if c_max > 0 else 1
+                fig_ctrend = go.Figure()
+                fig_ctrend.add_bar(
+                    x=c_monthly['월라벨'], y=c_monthly['퇴직자 수'],
+                    name='퇴직자 수', marker_color=COLORS['primary'],
+                    text=c_monthly['퇴직자 수'], textposition='outside', cliponaxis=False
+                )
+                fig_ctrend.add_trace(go.Scatter(
+                    x=c_monthly['월라벨'], y=c_monthly['퇴직자 수'],
+                    mode='lines+markers', name='추세선',
+                    line=dict(color=COLORS['secondary'], width=3)
+                ))
+                fig_ctrend.update_layout(xaxis_title='월', yaxis_title='명', height=320)
+                fig_ctrend.update_yaxes(range=[0, c_ymax])
+                st.plotly_chart(set_font(fig_ctrend), use_container_width=True)
+            else:
+                st.info("핵심인재 퇴직일 데이터가 비어 있어 추이를 표시할 수 없습니다.")
+        else:
+            st.info("'퇴직일' 컬럼이 없어 핵심인재 월별 퇴직 추이를 표시할 수 없습니다.")
+
+    with trend_col2:
+        st.subheader("핵심인재 퇴직사유")
+        if '퇴직사유' in core_all.columns:
+            c_reason_df = core_all[core_all['상태'] == 1]
+            c_vc = clean_text_series(c_reason_df['퇴직사유'])
+            c_counts = c_vc.value_counts(dropna=True)
+            if c_counts.sum() > 0:
+                c_top_n = 8
+                c_top = c_counts.head(c_top_n)
+                c_others = c_counts.iloc[c_top_n:].sum()
+                c_labels = list(c_top.index)
+                c_values = list(c_top.values)
+                if c_others > 0:
+                    c_labels.append('기타')
+                    c_values.append(c_others)
+                c_pie_df = pd.DataFrame({'퇴직사유': c_labels, '건수': c_values})
+                fig_creason = px.pie(c_pie_df, names='퇴직사유', values='건수', hole=0.45,
+                                     color_discrete_sequence=COLORS['sequence'])
+                fig_creason.update_traces(textposition='inside', textinfo='percent+label')
+                fig_creason.update_layout(height=320, showlegend=True)
+                st.plotly_chart(set_font(fig_creason), use_container_width=True)
+            else:
+                st.info("핵심인재 퇴직 사유 데이터가 없습니다.")
+        else:
+            st.info("'퇴직사유' 컬럼이 없어 퇴직사유 차트를 표시할 수 없습니다.")
 
     # -----------------------------
     # 핵심인재 고위험 Top 10
@@ -324,70 +388,6 @@ def render(ctx):
         )
     else:
         st.info("재직 중인 핵심인재가 없어 예측 리스트를 표시할 수 없습니다.")
-
-    # -----------------------------
-    # 핵심인재 퇴직 추이 + 퇴직사유 차트
-    # -----------------------------
-    st.markdown("---")
-    trend_col1, trend_col2 = st.columns([1.3, 1])
-
-    with trend_col1:
-        st.subheader("핵심인재 월별 퇴직 추이")
-        if '퇴직일' in core_all.columns:
-            core_left_df = core_all[(core_all['상태'] == 1) & (core_all['퇴직일'].notna())].copy()
-            if len(core_left_df) > 0:
-                core_left_df['퇴직년월'] = core_left_df['퇴직일'].dt.to_period('M')
-                c_monthly = core_left_df.groupby('퇴직년월').size().reset_index()
-                c_monthly.columns = ['년월', '퇴직자 수']
-                c_monthly = c_monthly.sort_values('년월')
-                c_monthly['월라벨'] = c_monthly['년월'].dt.strftime('%y.%m')
-
-                c_max = int(c_monthly['퇴직자 수'].max()) if len(c_monthly) > 0 else 0
-                c_ymax = c_max * 1.25 + 0.5 if c_max > 0 else 1
-                fig_ctrend = go.Figure()
-                fig_ctrend.add_bar(
-                    x=c_monthly['월라벨'], y=c_monthly['퇴직자 수'],
-                    name='퇴직자 수', marker_color=COLORS['primary'],
-                    text=c_monthly['퇴직자 수'], textposition='outside', cliponaxis=False
-                )
-                fig_ctrend.add_trace(go.Scatter(
-                    x=c_monthly['월라벨'], y=c_monthly['퇴직자 수'],
-                    mode='lines+markers', name='추세선',
-                    line=dict(color=COLORS['secondary'], width=3)
-                ))
-                fig_ctrend.update_layout(xaxis_title='월', yaxis_title='명', height=320)
-                fig_ctrend.update_yaxes(range=[0, c_ymax])
-                st.plotly_chart(set_font(fig_ctrend), use_container_width=True)
-            else:
-                st.info("핵심인재 퇴직일 데이터가 비어 있어 추이를 표시할 수 없습니다.")
-        else:
-            st.info("'퇴직일' 컬럼이 없어 핵심인재 월별 퇴직 추이를 표시할 수 없습니다.")
-
-    with trend_col2:
-        st.subheader("핵심인재 퇴직사유")
-        if '퇴직사유' in core_all.columns:
-            c_reason_df = core_all[core_all['상태'] == 1]
-            c_vc = clean_text_series(c_reason_df['퇴직사유'])
-            c_counts = c_vc.value_counts(dropna=True)
-            if c_counts.sum() > 0:
-                c_top_n = 8
-                c_top = c_counts.head(c_top_n)
-                c_others = c_counts.iloc[c_top_n:].sum()
-                c_labels = list(c_top.index)
-                c_values = list(c_top.values)
-                if c_others > 0:
-                    c_labels.append('기타')
-                    c_values.append(c_others)
-                c_pie_df = pd.DataFrame({'퇴직사유': c_labels, '건수': c_values})
-                fig_creason = px.pie(c_pie_df, names='퇴직사유', values='건수', hole=0.45,
-                                     color_discrete_sequence=COLORS['sequence'])
-                fig_creason.update_traces(textposition='inside', textinfo='percent+label')
-                fig_creason.update_layout(height=320, showlegend=True)
-                st.plotly_chart(set_font(fig_creason), use_container_width=True)
-            else:
-                st.info("핵심인재 퇴직 사유 데이터가 없습니다.")
-        else:
-            st.info("'퇴직사유' 컬럼이 없어 퇴직사유 차트를 표시할 수 없습니다.")
 
     # -----------------------------
     # 🔹 6) 핵심인재 퇴직률 분포 — 핵심인재 전체 기준

@@ -11,44 +11,10 @@ import shap
 from hr_styles import COLORS, TEXT_COLOR, set_font, add_pdf_button
 from hr_data import MISSING_TOKENS, CAT_COLS, clean_text_series, get_core_mask
 from hr_components import (
-    show_table_centered, render_risk_group_card, render_explanation,
+    show_table_centered, render_risk_group_card,
     bucketize_numeric, humanize_interval_label, cramers_v,
     excel_download_button,
 )
-
-
-def _render_validation_report(validation):
-    """🆕 업로드 데이터 품질 리포트"""
-    if not validation:
-        return
-    with st.expander("📋 데이터 품질 리포트", expanded=False):
-        v1, v2, v3 = st.columns(3)
-        v1.metric("행(직원 수)", f"{validation['n_rows']:,}")
-        v2.metric("열(컬럼 수)", f"{validation['n_cols']:,}")
-        v3.metric("표준 스키마 일치", f"{len(validation['matched_cols'])}개")
-
-        if validation['missing_expected']:
-            st.markdown(f"""
-            <div style="background-color: #FFFBEB; padding: 12px 16px; border-radius: 8px; border: 1px solid #FDE68A; margin: 8px 0;">
-                <p style="margin: 0; font-size: 13px; color: #92400E; line-height: 1.6;">
-                <b>누락된 표준 컬럼</b>: {', '.join(validation['missing_expected'])}<br>
-                해당 컬럼이 없어도 동작하지만, 추가하면 예측 정확도와 분석 범위가 향상됩니다.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        if validation['extra_cols']:
-            st.caption(f"표준 스키마 외 컬럼(예측에 자동 반영): {', '.join(validation['extra_cols'])}")
-
-        missing_top = validation.get('missing_top', {})
-        if missing_top:
-            miss_df = pd.DataFrame(
-                [{'컬럼': k, '결측/미입력 비율': f"{v:.1f}%"} for k, v in missing_top.items()]
-            )
-            st.markdown("**결측/미입력 비율 상위 컬럼**")
-            show_table_centered(miss_df)
-        else:
-            st.caption("결측/미입력 값이 없습니다. ✨")
 
 
 def render(ctx):
@@ -69,9 +35,6 @@ def render(ctx):
         </p>
     </div>
     """, unsafe_allow_html=True)
-
-    # 🆕 데이터 품질 리포트
-    _render_validation_report(ctx.get('validation'))
 
     total_rate = float(df['상태'].mean() * 100)
 
@@ -160,9 +123,9 @@ def render(ctx):
 
     core_rate_disp = f"{core_rate:.1f}%" if not np.isnan(core_rate) else "-"
     st.markdown(f"""
-> 🔹 전체 퇴직률 **{total_rate:.1f}%**, 핵심인재 퇴직률 **{core_rate_disp}**이며 월별 퇴직 추이는 **{trend}** 하고 있습니다.
-> 🔹 조직별 퇴직자는 {org_text} 입니다.
-> 🔹 퇴직 사유로는 **{reason_text}** 이며, 이직 인원 **{num_move}명**의 주요 이직처는 **{dest_text}** 입니다.
+> 🔹 전체 퇴직률 **{total_rate:.1f}%**, 핵심인재 퇴직률 **{core_rate_disp}**이며 월별 퇴직 추이는 **{trend}** 하고 있습니다.{"  "}
+> 🔹 조직별 퇴직자는 {org_text} 입니다.{"  "}
+> 🔹 퇴직 사유로는 **{reason_text}** 이며, 이직 인원 **{num_move}명**의 주요 이직처는 **{dest_text}** 입니다.{"  "}
 > 🔹 해당 데이터는 사무기술직이 대상이며, 임원 및 계약직은 제외하였습니다.
 """)
 
@@ -213,7 +176,26 @@ def render(ctx):
                 if isinstance(_shap_values, list):
                     _shap_values = _shap_values[1]
                 _shap_df = pd.DataFrame(_shap_values, columns=X.columns)
-                _shap_direction = _shap_df.mean().to_dict()
+                # 방향 판정:
+                # - mean(shap)은 클래스 가중치(scale_pos_weight) 때문에 전 변수가 음수로
+                #   쏠릴 수 있어 방향 지표로 부적합
+                # - 수치형: 변수값 ↔ SHAP값 상관의 부호 → "값이 높을수록/낮을수록 위험"
+                # - 범주형: 범주별 SHAP 평균이 가장 높은 그룹 → 모델이 위험하게 본 그룹
+                for feat in top_imp.index:
+                    try:
+                        if feat in label_encoders:
+                            grp_shap = pd.DataFrame(
+                                {'v': df[feat].values, 's': _shap_df[feat].values}
+                            ).groupby('v')['s'].mean()
+                            if len(grp_shap) > 0:
+                                _shap_direction[feat] = ('cat', int(grp_shap.idxmax()))
+                        else:
+                            vals = df[feat].astype(float)
+                            if vals.nunique() > 1 and _shap_df[feat].std() > 0:
+                                corr = float(np.corrcoef(vals, _shap_df[feat])[0, 1])
+                                _shap_direction[feat] = ('num', corr)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -221,13 +203,13 @@ def render(ctx):
             interpretation_rows = []
             for feat in top_imp.index:
                 importance_pct = (top_imp[feat] / _total_imp * 100) if _total_imp > 0 else 0
-                direction = _shap_direction.get(feat, 0)
 
                 left_group = df[df['상태'] == 1][feat].mean()
                 stay_group = df[df['상태'] == 0][feat].mean()
 
                 feat_display = feat
                 detail = ""
+                data_high_cat = None
                 if feat in label_encoders:
                     le = label_encoders[feat]
                     classes = list(le.classes_)
@@ -240,6 +222,7 @@ def render(ctx):
                             low_cat_idx = int(grp.idxmin())
                             high_cat = classes[high_cat_idx] if 0 <= high_cat_idx < len(classes) else str(high_cat_idx)
                             low_cat = classes[low_cat_idx] if 0 <= low_cat_idx < len(classes) else str(low_cat_idx)
+                            data_high_cat = high_cat
                             detail = (
                                 f"'{high_cat}' 그룹의 퇴직률이 가장 높고 "
                                 f"({grp.max()*100:.1f}%), '{low_cat}' 그룹이 가장 낮음 "
@@ -255,7 +238,24 @@ def render(ctx):
                     else:
                         detail = f"값이 낮을수록 퇴직 확률 상승 (퇴직자 평균: {left_group:.1f}, 재직자 평균: {stay_group:.1f})"
 
-                arrow = "↑ 퇴직 위험 증가" if direction > 0 else "↓ 퇴직 위험 감소"
+                # 방향 표시: SHAP 기반(우선) → 데이터 기반(폴백)
+                _dir_info = _shap_direction.get(feat)
+                if feat in label_encoders:
+                    risk_cat = None
+                    if _dir_info is not None and _dir_info[0] == 'cat':
+                        try:
+                            risk_cat = label_encoders[feat].inverse_transform([_dir_info[1]])[0]
+                        except Exception:
+                            risk_cat = None
+                    if risk_cat is None:
+                        risk_cat = data_high_cat
+                    arrow = f"● '{risk_cat}' 그룹 위험" if risk_cat is not None else "-"
+                else:
+                    if _dir_info is not None and _dir_info[0] == 'num':
+                        higher_risky = _dir_info[1] > 0
+                    else:
+                        higher_risky = left_group > stay_group
+                    arrow = "▲ 값 높을수록 위험" if higher_risky else "▼ 값 낮을수록 위험"
                 interpretation_rows.append({
                     "변수": feat_display,
                     "영향도": f"{importance_pct:.1f}%",
@@ -279,7 +279,7 @@ def render(ctx):
             <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 12px;">
                 <p style="margin: 0; font-size: 13px; color: #64748B; line-height: 1.7;">
                 <b>영향도</b>: 퇴직 예측에서 해당 변수가 차지하는 비중 (전체 합계 = 100%)<br>
-                <b>방향</b>: 해당 변수가 전반적으로 퇴직 확률을 높이는지(↑) 낮추는지(↓)<br>
+                <b>방향</b>: 모델(SHAP 분석)이 판단한 위험 방향 — 어떤 값(▲높음/▼낮음)·그룹(●)일 때 퇴직 위험이 높아지는지<br>
                 <b>해석</b>: 퇴직자와 재직자 그룹 간 실제 평균 비교 기반 설명
                 </p>
             </div>
