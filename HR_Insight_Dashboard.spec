@@ -1,7 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files, collect_all
 
-datas = [('pj7.py', '.')]
+datas = [
+    ('pj7.py', '.'),
+    ('hr_styles.py', '.'),
+    ('hr_data.py', '.'),
+    ('hr_model.py', '.'),
+    ('hr_components.py', '.'),
+    ('view_overview.py', '.'),
+    ('view_core.py', '.'),
+    ('view_individual.py', '.'),
+]
 binaries = []
 hiddenimports = [
     # xgboost
